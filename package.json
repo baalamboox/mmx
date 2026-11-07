@@ -1,0 +1,17 @@
+{
+  "name": "kortexa",
+  "version": "1.0.0",
+  "description": "Segundo cerebro con Markdown hipervinculado, vista de grafo y servidor MCP para IA",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "mcp": "node mcp-server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "zod": "^4.6.7"
+  }
+}

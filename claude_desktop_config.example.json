@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "kortexa": {
+      "command": "node",
+      "args": [
+        "C:\\Users\\Guillermo Jimenez\\Downloads\\obsidian-node\\mcp-server.js"
+      ],
+      "env": {
+        "VAULT_API_URL": "http://localhost:3000/api"
+      }
+    }
+  }
+}

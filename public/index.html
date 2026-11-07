@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kortexa — Segundo Cerebro & Red Sináptica</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css?v=20261106k">
+  <script>
+    (function() {
+      const saved = localStorage.getItem('kortexa-theme') || 'auto';
+      let resolved = saved;
+      if (saved === 'auto') {
+        resolved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }
+      document.documentElement.setAttribute('data-resolved-theme', resolved);
+      document.documentElement.setAttribute('data-theme-mode', saved);
+    })();
+  </script>
+  <!-- Marked para parsear Markdown -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- Force Graph para visualizar la red de notas -->
+  <script src="https://unpkg.com/force-graph"></script>
+  <!-- FortuneSheet (Excel para Kortexa) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortune-sheet/react/dist/index.css">
+  <script type="module" src="fortunesheet-adapter.js?v=20261106f"></script>
+</head>
+<body>
+  <!-- TELÓN DE FONDO PARA MÓVILES (BACKDROP) -->
+  <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
+
+  <div class="app-layout">
+    <!-- BARRA LATERAL CEREBRAL -->
+    <aside id="app-sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <div class="brand-wrapper">
+          <div class="brand-avatar">
+            <svg class="cortex-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2a4 4 0 0 0-4 4v1a4 4 0 0 0-3 3.87A4 4 0 0 0 2 15a4 4 0 0 0 4 4h1a4 4 0 0 0 3.87 3 4 4 0 0 0 4.26 0A4 4 0 0 0 19 19h1a4 4 0 0 0 4-4 4 4 0 0 0-3-4.13A4 4 0 0 0 16 7V6a4 4 0 0 0-4-4z"/>
+              <path d="M12 2v20M8 8c0 2.2 1.8 4 4 4s4-1.8 4-4M6 14c0 2 2 3.5 4 4"/>
+            </svg>
+          </div>
+          <div class="brand-info">
+            <span class="brand-name">KORTEXA</span>
+            <div class="brand-subtitle-row">
+              <span class="ai-badge">MCP AI</span>
+              <span class="brand-tagline">Second Brain</span>
+            </div>
+          </div>
+        </div>
+        
+        <div class="sidebar-header-actions">
+          <button id="btn-close-sidebar" class="icon-action-btn mobile-close-sidebar-btn" title="Cerrar menú">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- ESPACIO DE TRABAJO / BÓVEDA ACTIVA (PATRÓN NOTION/SLACK) -->
+      <div class="vault-workspace-header">
+        <div class="custom-vault-dropdown" id="custom-vault-dropdown">
+          <button type="button" id="vault-dropdown-trigger" class="custom-vault-trigger workspace-trigger" aria-haspopup="listbox" aria-expanded="false" title="Cambiar de Bóveda">
+            <span class="workspace-vault-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="2" width="20" height="20" rx="4"/>
+                <circle cx="12" cy="12" r="4"/>
+                <line x1="12" y1="8" x2="12" y2="10"/>
+                <line x1="12" y1="14" x2="12" y2="16"/>
+                <line x1="8" y1="12" x2="10" y2="12"/>
+                <line x1="14" y1="12" x2="16" y2="12"/>
+              </svg>
+            </span>
+            <div class="workspace-vault-info">
+              <span class="workspace-vault-caption">BÓVEDA ACTIVA</span>
+              <span id="vault-dropdown-label" class="vault-dropdown-label">Bóveda</span>
+            </div>
+            <svg class="vault-dropdown-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </button>
+          <div id="vault-dropdown-menu" class="custom-vault-menu workspace-menu" role="listbox" aria-label="Bóvedas disponibles">
+            <!-- Cargado dinámicamente -->
+          </div>
+        </div>
+
+        <div class="vault-more-dropdown" id="vault-more-dropdown">
+          <button type="button" id="btn-vault-more" class="vault-more-btn workspace-more-btn" aria-haspopup="true" aria-expanded="false" title="Opciones de la bóveda" aria-label="Opciones de la bóveda">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="5" cy="12" r="2.2"/>
+              <circle cx="12" cy="12" r="2.2"/>
+              <circle cx="19" cy="12" r="2.2"/>
+            </svg>
+          </button>
+          <div id="vault-more-menu" class="vault-more-menu workspace-more-menu" role="menu" aria-labelledby="btn-vault-more">
+            <button type="button" id="btn-lock-vault" class="vault-more-item" role="menuitem" title="Cifrar o bloquear la bóveda activa">
+              <span id="btn-lock-vault-icon" class="vault-more-item-icon">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                </svg>
+              </span>
+              <span id="btn-lock-vault-text">Seguridad y Cifrado</span>
+            </button>
+            <button type="button" id="btn-rename-vault" class="vault-more-item" role="menuitem" title="Renombrar la bóveda activa">
+              <span class="vault-more-item-icon">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
+                </svg>
+              </span>
+              <span>Renombrar Bóveda</span>
+            </button>
+            <button type="button" id="btn-add-vault" class="vault-more-item" role="menuitem" title="Crear una nueva bóveda">
+              <span class="vault-more-item-icon">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19"/>
+                  <line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+              </span>
+              <span>Nueva Bóveda</span>
+            </button>
+            <button type="button" id="btn-manage-vault" class="vault-more-item" role="menuitem" title="Abrir gestor general de bóvedas">
+              <span class="vault-more-item-icon">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="3"/>
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                </svg>
+              </span>
+              <span>Gestionar Bóvedas...</span>
+            </button>
+            <div class="vault-more-divider"></div>
+            <button type="button" id="btn-delete-vault" class="vault-more-item danger vault-delete-trigger-btn" role="menuitem" title="Eliminar la bóveda activa">
+              <span class="vault-more-item-icon">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                  <line x1="10" y1="11" x2="10" y2="17"/>
+                  <line x1="14" y1="11" x2="14" y2="17"/>
+                </svg>
+              </span>
+              <span>Eliminar Bóveda</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- BUSCADOR SPOTLIGHT -->
+      <div class="search-container">
+        <div class="search-box">
+          <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+          </svg>
+          <input type="text" id="search-input" placeholder="Buscar notas..." spellcheck="false">
+          <kbd class="search-kbd">Ctrl+K</kbd>
+        </div>
+      </div>
+
+      <!-- SWITCHER DE VISTAS (PENSAMIENTOS VS RED SINÁPTICA) -->
+      <div class="view-switcher-bar">
+        <button id="nav-editor" class="switcher-pill active" title="Notas">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+          </svg>
+          <span class="switcher-pill-label"><span class="switcher-pill-text">Notas</span></span>
+        </button>
+        <button id="nav-graph" class="switcher-pill" title="Red Sináptica">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+          </svg>
+          <span class="switcher-pill-label"><span class="switcher-pill-text">Red Sináptica</span></span>
+        </button>
+      </div>
+
+      <!-- SECCIÓN DE ACCIONES (NUEVA NOTA & NUEVA CARPETA) -->
+      <div class="sidebar-actions-section">
+        <span class="actions-section-label">ACCIONES</span>
+        <div class="actions-round-group">
+          <button id="btn-new-note" class="round-action-btn primary" title="Crear nueva nota">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+          </button>
+          <button id="btn-new-folder" class="round-action-btn" title="Crear nueva subcarpeta">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              <line x1="12" y1="11" x2="12" y2="17"/>
+              <line x1="9" y1="14" x2="15" y2="14"/>
+            </svg>
+          </button>
+          <button id="btn-collapse-all" class="round-action-btn" title="Colapsar todas las carpetas">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="7 8 12 13 17 8"/>
+              <polyline points="7 16 12 11 17 16"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- LISTA DE NODOS / NOTAS -->
+      <div class="notes-meta-bar">
+        <div class="notes-meta-left">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+          </svg>
+          <span class="meta-label">EXPLORADOR DE NOTAS</span>
+        </div>
+        <span id="notes-count" class="meta-badge" title="Cantidad de archivos en la bóveda">0</span>
+      </div>
+
+      <ul id="notes-list" class="notes-list">
+        <!-- Renderizado dinámico -->
+      </ul>
+
+      <!-- PIE DE SIDEBAR CON ESTADO Y SELECTOR DE TEMA -->
+      <div class="sidebar-footer">
+        <div class="neural-pulse-indicator" id="vault-status-indicator" title="Bóveda local activa (clic para gestionar bóvedas)">
+          <span class="pulse-dot"></span>
+          <span class="pulse-label">Bóveda: <strong id="vault-display-name">vault</strong></span>
+        </div>
+        
+        <div class="theme-switcher" title="Modo de interfaz: Claro, Oscuro o Automático">
+          <button id="theme-btn-light" class="theme-btn" data-theme-val="light" title="Modo Claro">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="5"/>
+              <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+            </svg>
+          </button>
+          <button id="theme-btn-dark" class="theme-btn" data-theme-val="dark" title="Modo Oscuro">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+            </svg>
+          </button>
+          <button id="theme-btn-auto" class="theme-btn" data-theme-val="auto" title="Automático (Detectar Sistema)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+              <line x1="8" y1="21" x2="16" y2="21"/>
+              <line x1="12" y1="17" x2="12" y2="21"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ÁREA PRINCIPAL / LIENZO -->
+    <main class="main-content">
+      <!-- VISTA EDITOR -->
+      <section id="view-editor" class="view-panel active">
+        <header class="editor-header">
+          <button id="btn-toggle-sidebar" class="icon-action-btn mobile-menu-btn" title="Abrir notas y menú">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="3" y1="12" x2="21" y2="12"/>
+              <line x1="3" y1="6" x2="21" y2="6"/>
+              <line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+          </button>
+
+          <div class="title-input-wrapper">
+            <span class="node-prefix-badge" title="Documento Markdown (.md)">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+              </svg>
+            </span>
+            <div id="note-folder-badge" class="note-folder-badge" title="Carpeta actual (clic para mover o cambiar)">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              <span id="note-folder-name">Raíz</span>
+            </div>
+            <input type="text" id="note-title-input" placeholder="Título del pensamiento..." spellcheck="false">
+          </div>
+          
+          <div class="header-actions">
+            <div id="save-status-container" class="status-pill">
+              <span class="status-dot"></span>
+              <span id="save-status">Guardado</span>
+            </div>
+
+            <div class="mode-toggles">
+              <button id="btn-mode-split" class="toggle-btn active" title="Lienzo Dividido">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                <span>Dividido</span>
+              </button>
+              <button id="btn-mode-preview" class="toggle-btn" title="Solo Renderizado">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                <span>Previa</span>
+              </button>
+              <button id="btn-mode-edit" class="toggle-btn" title="Solo Código Markdown">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                <span>Editor</span>
+              </button>
+            </div>
+
+            <button id="btn-delete-note" class="icon-action-btn danger" title="Eliminar nota">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <!-- BARRA DE HERRAMIENTAS DE FORMATO (ESTILO WORD / MARKDOWN) -->
+        <div class="markdown-toolbar" id="markdown-toolbar" role="toolbar" aria-label="Herramientas de formato Markdown">
+          <div class="toolbar-group">
+            <select id="toolbar-heading-select" class="toolbar-select" title="Estilo de Encabezado">
+              <option value="p">Párrafo Normal</option>
+              <option value="h1">Título 1 (H1 — Principal)</option>
+              <option value="h2">Título 2 (H2 — Sección)</option>
+              <option value="h3">Título 3 (H3 — Subtítulo)</option>
+              <option value="h4">Título 4 (H4 — Pequeño)</option>
+              <option value="h5">Título 5 (H5 — Mínimo)</option>
+              <option value="h6">Título 6 (H6 — Etiqueta)</option>
+            </select>
+
+            <select id="toolbar-size-select" class="toolbar-select" title="Tamaño del Texto">
+              <option value="normal">Tamaño Normal</option>
+              <option value="huge">Muy Grande (#)</option>
+              <option value="large">Grande (##)</option>
+              <option value="medium">Mediano (###)</option>
+              <option value="small">Pequeño (&lt;small&gt;)</option>
+            </select>
+          </div>
+
+          <div class="toolbar-divider"></div>
+
+          <div class="toolbar-group">
+            <button type="button" class="toolbar-btn" data-action="bold" title="Negrita (**texto**) [Ctrl+B]">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M6 4h8a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"/>
+                <path d="M6 12h9a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"/>
+              </svg>
+            </button>
+            <button type="button" class="toolbar-btn" data-action="italic" title="Cursiva (*texto*) [Ctrl+I]">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="19" y1="4" x2="10" y2="4"/>
+                <line x1="14" y1="20" x2="5" y2="20"/>
+                <line x1="15" y1="4" x2="9" y2="20"/>
+              </svg>
+            </button>
+            <button type="button" class="toolbar-btn" data-action="underline" title="Subrayado (&lt;u&gt;texto&lt;/u&gt;) [Ctrl+U]">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M6 3v7a6 6 0 0 0 6 6 6 6 0 0 0 6-6V3"/>
+                <line x1="4" y1="21" x2="20" y2="21"/>
+              </svg>
+            </button>
+            <button type="button" class="toolbar-btn" data-action="strike" title="Tachado (~~texto~~)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M16 4H9a3 3 0 0 0-2.83 4"/>
+                <path d="M14 12a4 4 0 0 1 0 8H6"/>
+                <line x1="4" y1="12" x2="20" y2="12"/>
+              </svg>
+            </button>
+            <button type="button" class="toolbar-btn" data-action="highlight" title="Resaltado (==texto==)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m9 11-6 6v3h3l6-6"/>
+                <path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/>
+              </svg>
+            </button>
+          </div>
+
+          <div class="toolbar-divider"></div>
+
+          <div class="toolbar-group">
+            <button type="button" class="toolbar-btn" data-action="bullet-list" title="Lista con viñetas (- )">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="8" y1="6" x2="21" y2="6"/>
+                <line x1="8" y1="12" x2="21" y2="12"/>
+                <line x1="8" y1="18" x2="21" y2="18"/>
+                <line x1="3" y1="6" x2="3.01" y2="6"/>
+                <line x1="3" y1="12" x2="3.01" y2="12"/>
+                <line x1="3" y1="18" x2="3.01" y2="18"/>
+              </svg>
+            </button>
+            <button type="button" class="toolbar-btn" data-action="ordered-list" title="Lista numerada (1. )">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="10" y1="6" x2="21" y2="6"/>
+                <line x1="10" y1="12" x2="21" y2="12"/>
+                <line x1="10" y1="18" x2="21" y2="18"/>
+                <path d="M4 6h1v4"/>
+                <path d="M4 10h2"/>
+                <path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>
+              </svg>
+            </button>
+            <button type="button" class="toolbar-btn" data-action="task-list" title="Lista de verificación (- [ ])">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="5" width="6" height="6" rx="1"/>
+                <path d="m5 8 1 1 2-2"/>
+                <line x1="13" y1="8" x2="21" y2="8"/>
+                <rect x="3" y="15" width="6" height="6" rx="1"/>
+                <line x1="13" y1="18" x2="21" y2="18"/>
+              </svg>
+            </button>
+          </div>
+
+          <div class="toolbar-divider"></div>
+
+          <div class="toolbar-group">
+            <button type="button" class="toolbar-btn" data-action="quote" title="Cita en bloque (> )">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"/>
+                <path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"/>
+              </svg>
+            </button>
+            <button type="button" class="toolbar-btn" data-action="code" title="Código en línea (`código`)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="16 18 22 12 16 6"/>
+                <polyline points="8 6 2 12 8 18"/>
+              </svg>
+            </button>
+            <button type="button" class="toolbar-btn" data-action="codeblock" title="Bloque de código (```)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="3" width="20" height="18" rx="3"/>
+                <polyline points="7 10 10 12 7 14"/>
+                <line x1="13" y1="15" x2="17" y2="15"/>
+              </svg>
+            </button>
+            <button type="button" class="toolbar-btn" data-action="table" title="Insertar tabla">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2"/>
+                <line x1="3" y1="9" x2="21" y2="9"/>
+                <line x1="3" y1="15" x2="21" y2="15"/>
+                <line x1="9" y1="3" x2="9" y2="21"/>
+                <line x1="15" y1="3" x2="15" y2="21"/>
+              </svg>
+            </button>
+            <button type="button" class="toolbar-btn" data-action="sheet" title="Insertar Hoja de Cálculo (Excel / FortuneSheet)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2"/>
+                <path d="M3 9h18"/>
+                <path d="M3 15h18"/>
+                <path d="M9 3v18"/>
+              </svg>
+            </button>
+            <button type="button" class="toolbar-btn" data-action="hr" title="Línea divisoria (---)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="2" y1="12" x2="22" y2="12"/>
+                <circle cx="5" cy="12" r="1.5"/>
+                <circle cx="19" cy="12" r="1.5"/>
+              </svg>
+            </button>
+          </div>
+
+          <div class="toolbar-divider"></div>
+
+          <div class="toolbar-group">
+            <button type="button" class="toolbar-btn" data-action="link" title="Enlace Web ([texto](url)) [Ctrl+K]">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+              </svg>
+            </button>
+            <button type="button" class="toolbar-btn" data-action="wikilink" title="Enlace Sináptico de Bóveda ([[Nota]])">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4"/>
+                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+                <line x1="8" y1="12" x2="16" y2="12"/>
+              </svg>
+            </button>
+            <button type="button" class="toolbar-btn" data-action="image" title="Incrustar imagen de la bóveda (![[Imagen]])">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2"/>
+                <circle cx="8.5" cy="8.5" r="1.5"/>
+                <polyline points="21 15 16 10 5 21"/>
+              </svg>
+            </button>
+            <button type="button" class="toolbar-btn" data-action="video" title="Incrustar video (Bóveda o YouTube)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="23 7 16 12 23 17 23 7"/>
+                <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+              </svg>
+            </button>
+            <button type="button" class="toolbar-btn" data-action="audio" title="Incrustar audio o nota de voz de la bóveda (![[Audio]])">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 18V5l12-2v13"/>
+                <circle cx="6" cy="18" r="3"/>
+                <circle cx="18" cy="16" r="3"/>
+              </svg>
+            </button>
+            <button type="button" class="toolbar-btn rec-toolbar-btn" data-action="record-audio" title="Grabar nota de voz con micrófono [Ctrl+M]">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="23"/>
+                <line x1="8" y1="23" x2="16" y2="23"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- CUERPO DE TRABAJO (EDITOR MARKDOWN) -->
+        <div class="editor-body split-mode" id="editor-workspace">
+          <!-- Panel de Edición en Markdown -->
+          <div class="pane edit-pane">
+            <div class="pane-label">ENTRADA MARKDOWN</div>
+            <textarea id="markdown-input" placeholder="Captura aquí tus ideas en Markdown... Usa [[Nombre]] o ![[Archivo.png]] para enlazar o incrustar multimedia." spellcheck="false"></textarea>
+          </div>
+
+          <!-- Panel de Vista Previa Renderizada -->
+          <div class="pane preview-pane">
+            <div class="pane-label">VISTA CEREBRAL RENDERIZADA</div>
+            <div id="markdown-preview" class="markdown-rendered"></div>
+          </div>
+        </div>
+
+        <!-- VISOR MULTIMEDIA (IMÁGENES, VIDEOS, AUDIOS, PDF) -->
+        <div class="media-viewer-body" id="media-viewer-workspace" style="display: none;">
+          <div class="media-viewer-content" id="media-viewer-content"></div>
+        </div>
+
+        <!-- FOOTER DE CONEXIONES SINÁPTICAS (BACKLINKS) -->
+        <footer class="backlinks-footer">
+          <div class="backlinks-header">
+            <div class="backlinks-title-group">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+              </svg>
+              <span>Vías Sinápticas (Menciones y Backlinks)</span>
+            </div>
+            <span id="backlinks-count" class="badge-count">0</span>
+          </div>
+          <div id="backlinks-list" class="backlinks-chips">
+            <span class="no-backlinks">No hay conexiones entrantes hacia este pensamiento.</span>
+          </div>
+        </footer>
+      </section>
+
+      <!-- VISTA DE GRAFO INTERACTIVO -->
+      <section id="view-graph" class="view-panel">
+        <button id="btn-graph-menu" class="action-btn-circle mobile-graph-menu-btn" title="Abrir notas">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="3" y1="12" x2="21" y2="12"/>
+            <line x1="3" y1="6" x2="21" y2="6"/>
+            <line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
+
+        <div class="graph-overlay-card">
+          <div class="graph-card-badge">
+            <span class="graph-dot"></span>
+            <span>RED DE CONOCIMIENTO VIVA</span>
+          </div>
+          <h2>Cartografía Sináptica</h2>
+          <p>Visualiza el flujo de tus pensamientos. Haz clic en un nodo para navegarlo.</p>
+        </div>
+        <div id="graph-container"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- COMPONENTE MODAL DE ALERTAS Y CONFIRMACIÓN KORTEXA -->
+  <div id="modal-container" class="modal-backdrop" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-body">
+        <div id="modal-icon-wrapper" class="modal-icon-badge danger">
+          <svg id="modal-icon-svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            <line x1="10" y1="11" x2="10" y2="17"/>
+            <line x1="14" y1="11" x2="14" y2="17"/>
+          </svg>
+        </div>
+        <div class="modal-content-group">
+          <h3 id="modal-title">Confirmar Acción</h3>
+          <p id="modal-message">¿Estás seguro de que deseas proceder?</p>
+          <div id="modal-input-container" class="modal-input-container" style="display: none;">
+            <input type="text" id="modal-input-field" class="modal-input-field" placeholder="Nombre de la carpeta...">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="modal-btn-cancel" class="modal-btn secondary">Cancelar</button>
+        <button id="modal-btn-confirm" class="modal-btn danger">Eliminar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL GESTOR DE BÓVEDAS (OBSIDIAN STYLE) -->
+  <div id="vault-manager-modal" class="modal-backdrop" aria-hidden="true">
+    <div class="modal-card vault-manager-card" role="dialog" aria-modal="true" aria-labelledby="vault-manager-title">
+      <div class="modal-body" style="align-items: flex-start;">
+        <div class="modal-icon-badge info">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="2" width="20" height="20" rx="4"/>
+            <circle cx="12" cy="12" r="4"/>
+            <line x1="12" y1="8" x2="12" y2="10"/>
+            <line x1="12" y1="14" x2="12" y2="16"/>
+            <line x1="8" y1="12" x2="10" y2="12"/>
+            <line x1="14" y1="12" x2="16" y2="12"/>
+          </svg>
+        </div>
+        <div class="modal-content-group" style="width: 100%;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px; flex-wrap: wrap;">
+            <h3 id="vault-manager-title" style="margin: 0;">Gestor de Bóvedas</h3>
+            <div style="display: flex; gap: 6px;">
+              <button id="btn-vault-manager-security" class="modal-btn secondary" style="padding: 5px 10px; font-size: 11.5px; height: auto;">
+                🔒 Cifrado
+              </button>
+              <button id="btn-vault-manager-new" class="modal-btn primary" style="padding: 5px 10px; font-size: 11.5px; height: auto;">
+                + Nueva Bóveda
+              </button>
+            </div>
+          </div>
+          <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">Selecciona una bóveda para abrirla o crea un nuevo espacio de notas independiente.</p>
+          <div id="vaults-list-container" class="vaults-list-container">
+            <!-- Renderizado dinámico de bóvedas -->
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-close-vault-manager" class="modal-btn secondary">Cerrar</button>
+      </div>
+    </div>
+  </div>
+  <!-- MODAL SELECTOR DE IMÁGENES DE LA BÓVEDA -->
+  <div id="image-picker-modal" class="modal-backdrop" aria-hidden="true">
+    <div class="modal-card image-picker-card" role="dialog" aria-modal="true" aria-labelledby="image-picker-title">
+      <div class="modal-body" style="align-items: flex-start; padding-bottom: 10px;">
+        <div class="modal-icon-badge info">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <polyline points="21 15 16 10 5 21"/>
+          </svg>
+        </div>
+        <div class="modal-content-group" style="width: 100%;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; gap: 8px; flex-wrap: wrap;">
+            <div>
+              <h3 id="image-picker-title" style="margin: 0; font-size: 16px;">Insertar Imagen de la Bóveda</h3>
+              <p style="margin: 3px 0 0; font-size: 12px; color: var(--text-muted);">Selecciona una imagen de tu bóveda o sube una nueva.</p>
+            </div>
+            <button type="button" id="btn-image-picker-upload" class="modal-btn primary" style="padding: 5px 12px; font-size: 11.5px; height: auto;">
+              + Subir Nueva Imagen
+            </button>
+          </div>
+
+          <!-- Búsqueda y Filtro -->
+          <div class="image-picker-search-bar" style="margin-top: 10px;">
+            <input type="text" id="image-picker-search" class="modal-input-field" placeholder="Buscar imagen por nombre o subcarpeta..." style="width: 100%; box-sizing: border-box;">
+          </div>
+
+          <!-- Cuadrícula de Imágenes -->
+          <div id="image-picker-grid" class="image-picker-grid">
+            <!-- Cargado dinámicamente -->
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+        <button type="button" id="btn-image-picker-url" class="modal-btn secondary" style="font-size: 11.5px;">
+          🔗 Desde URL Externa
+        </button>
+        <div style="display: flex; gap: 8px;">
+          <button type="button" id="btn-close-image-picker" class="modal-btn secondary">Cancelar</button>
+          <button type="button" id="btn-confirm-image-picker" class="modal-btn primary" disabled>Insertar en Nota</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <input type="file" id="image-picker-file-input" style="display: none;" accept="image/*">
+
+  <!-- MODAL SELECTOR DE VIDEOS -->
+  <div id="video-picker-modal" class="modal-backdrop" aria-hidden="true">
+    <div class="modal-card video-picker-card" role="dialog" aria-modal="true" aria-labelledby="video-picker-title">
+      <div class="modal-body" style="align-items: flex-start; padding-bottom: 10px;">
+        <div class="modal-icon-badge info">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="23 7 16 12 23 17 23 7"/>
+            <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+          </svg>
+        </div>
+        <div class="modal-content-group" style="width: 100%;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; gap: 8px; flex-wrap: wrap;">
+            <div>
+              <h3 id="video-picker-title" style="margin: 0; font-size: 16px;">Insertar Video</h3>
+              <p style="margin: 3px 0 0; font-size: 12px; color: var(--text-muted);">Selecciona un video de tu bóveda o incrusta desde YouTube / Web.</p>
+            </div>
+            <button type="button" id="btn-video-picker-upload" class="modal-btn primary" style="padding: 5px 12px; font-size: 11.5px; height: auto;">
+              + Subir Nuevo Video
+            </button>
+          </div>
+
+          <!-- Búsqueda y Filtro -->
+          <div class="video-picker-search-bar" style="margin-top: 10px;">
+            <input type="text" id="video-picker-search" class="modal-input-field" placeholder="Buscar video en la bóveda por nombre o subcarpeta..." style="width: 100%; box-sizing: border-box;">
+          </div>
+
+          <!-- Cuadrícula de Videos -->
+          <div id="video-picker-grid" class="video-picker-grid">
+            <!-- Cargado dinámicamente -->
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+        <button type="button" id="btn-video-picker-url" class="modal-btn secondary" style="font-size: 11.5px;">
+          ▶ YouTube / URL Web
+        </button>
+        <div style="display: flex; gap: 8px;">
+          <button type="button" id="btn-close-video-picker" class="modal-btn secondary">Cancelar</button>
+          <button type="button" id="btn-confirm-video-picker" class="modal-btn primary" disabled>Insertar Video</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <input type="file" id="video-picker-file-input" style="display: none;" accept="video/*,.mp4,.webm,.mov,.mkv,.ogv">
+
+  <!-- MODAL SELECTOR DE AUDIOS Y NOTAS DE VOZ -->
+  <div id="audio-picker-modal" class="modal-backdrop" aria-hidden="true">
+    <div class="modal-card audio-picker-card" role="dialog" aria-modal="true" aria-labelledby="audio-picker-title">
+      <div class="modal-body" style="align-items: flex-start; padding-bottom: 10px;">
+        <div class="modal-icon-badge info">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 18V5l12-2v13"/>
+            <circle cx="6" cy="18" r="3"/>
+            <circle cx="18" cy="16" r="3"/>
+          </svg>
+        </div>
+        <div class="modal-content-group" style="width: 100%;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; gap: 8px; flex-wrap: wrap;">
+            <div>
+              <h3 id="audio-picker-title" style="margin: 0; font-size: 16px;">Insertar Audio</h3>
+              <p style="margin: 3px 0 0; font-size: 12px; color: var(--text-muted);">Selecciona un audio de tu bóveda, sube un archivo o graba una nota de voz.</p>
+            </div>
+            <div style="display: flex; gap: 6px;">
+              <button type="button" id="btn-audio-picker-record" class="modal-btn secondary" style="padding: 5px 12px; font-size: 11.5px; height: auto; border-color: var(--pink-core); color: var(--pink-core);">
+                🎙️ Grabar Voz
+              </button>
+              <button type="button" id="btn-audio-picker-upload" class="modal-btn primary" style="padding: 5px 12px; font-size: 11.5px; height: auto;">
+                + Subir Audio
+              </button>
+            </div>
+          </div>
+
+          <!-- Búsqueda y Filtro -->
+          <div class="audio-picker-search-bar" style="margin-top: 10px;">
+            <input type="text" id="audio-picker-search" class="modal-input-field" placeholder="Buscar audio en la bóveda por nombre o subcarpeta..." style="width: 100%; box-sizing: border-box;">
+          </div>
+
+          <!-- Cuadrícula / Lista de Audios -->
+          <div id="audio-picker-grid" class="audio-picker-grid">
+            <!-- Cargado dinámicamente -->
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: flex-end; align-items: center; gap: 8px;">
+        <button type="button" id="btn-close-audio-picker" class="modal-btn secondary">Cancelar</button>
+        <button type="button" id="btn-confirm-audio-picker" class="modal-btn primary" disabled>Insertar Audio</button>
+      </div>
+    </div>
+  </div>
+  <input type="file" id="audio-picker-file-input" style="display: none;" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac,.weba,.opus">
+
+  <!-- MODAL GRABADORA DE NOTAS DE VOZ CON MICRÓFONO -->
+  <div id="voice-recorder-modal" class="modal-backdrop" aria-hidden="true">
+    <div class="modal-card voice-recorder-card" role="dialog" aria-modal="true" aria-labelledby="voice-recorder-title">
+      <div class="voice-recorder-header">
+        <div class="voice-recorder-title-row">
+          <div class="voice-rec-badge-pill" id="voice-rec-badge-pill">
+            <span class="rec-dot"></span>
+            <span id="voice-rec-status-text">LISTO PARA GRABAR</span>
+          </div>
+          <h3 id="voice-recorder-title" style="margin: 0; font-size: 16px;">Grabadora de Notas de Voz</h3>
+        </div>
+        <button type="button" id="btn-close-voice-rec" class="icon-action-btn" title="Cerrar grabadora">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="voice-recorder-body">
+        <!-- Visualizador de Onda y Temporizador -->
+        <div class="voice-rec-display" id="voice-rec-display">
+          <div class="voice-rec-live-indicator">
+            <span class="live-rec-badge">● EN VIVO</span>
+            <div class="rec-vu-meter" id="rec-vu-meter" title="Nivel de entrada de micrófono">
+              <span class="vu-bar"></span>
+              <span class="vu-bar"></span>
+              <span class="vu-bar"></span>
+              <span class="vu-bar"></span>
+              <span class="vu-bar"></span>
+              <span class="vu-bar"></span>
+              <span class="vu-bar"></span>
+              <span class="vu-bar"></span>
+            </div>
+          </div>
+          <div class="voice-rec-timer" id="voice-rec-timer">00:00</div>
+          <canvas id="voice-rec-visualizer" class="voice-rec-visualizer" width="480" height="80"></canvas>
+        </div>
+
+        <!-- Controles de Grabación -->
+        <div class="voice-rec-controls">
+          <div class="voice-rec-button-wrap" id="voice-rec-button-wrap">
+            <div class="sonar-ring ring-1"></div>
+            <div class="sonar-ring ring-2"></div>
+            <div class="sonar-ring ring-3"></div>
+            <button type="button" id="btn-voice-rec-toggle" class="voice-rec-main-btn" title="Iniciar Grabación">
+              <svg id="voice-rec-btn-icon" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="23"/>
+                <line x1="8" y1="23" x2="16" y2="23"/>
+              </svg>
+            </button>
+          </div>
+          <div class="voice-rec-sub-controls" id="voice-rec-sub-controls" style="display: none;">
+            <button type="button" id="btn-voice-rec-pause" class="voice-rec-aux-btn" title="Pausar / Reanudar">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="4" width="4" height="16"/>
+                <rect x="14" y="4" width="4" height="16"/>
+              </svg>
+              <span id="voice-rec-pause-text">Pausar</span>
+            </button>
+            <button type="button" id="btn-voice-rec-discard" class="voice-rec-aux-btn danger" title="Descartar grabación">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+              </svg>
+              <span>Descartar</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Panel de Preescucha y Confirmación (aparece al detener) -->
+        <div id="voice-rec-preview-panel" class="voice-rec-preview-panel" style="display: none;">
+          <div class="voice-rec-preview-row">
+            <span class="preview-caption">Preescucha de la nota grabada:</span>
+            <audio id="voice-rec-audio-preview" controls class="voice-rec-audio-elem"></audio>
+          </div>
+          <div class="voice-rec-filename-group">
+            <label for="input-voice-rec-name" class="voice-rec-label">Nombre de archivo en bóveda:</label>
+            <div class="voice-rec-input-wrap">
+              <input type="text" id="input-voice-rec-name" class="modal-input-field" placeholder="nota-voz-20261106-1500" spellcheck="false">
+              <span class="voice-rec-ext-tag" id="voice-rec-ext-tag">.weba</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer" style="display: flex; justify-content: flex-end; align-items: center; gap: 8px;">
+        <button type="button" id="btn-cancel-voice-rec" class="modal-btn secondary">Cancelar</button>
+        <button type="button" id="btn-save-voice-rec" class="modal-btn primary" disabled>✓ Guardar e Insertar en Nota</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL DE PANTALLA COMPLETA DE HOJA DE CÁLCULO (FORTUNESHEET EXCEL) -->
+  <div id="fortunesheet-modal" class="modal-backdrop" aria-hidden="true">
+    <div class="modal-card fortunesheet-modal-card" role="dialog" aria-modal="true" aria-labelledby="fortunesheet-modal-title">
+      <div class="fortunesheet-modal-header">
+        <div class="fortunesheet-title-group">
+          <span class="fortunesheet-badge">EXCEL</span>
+          <h3 id="fortunesheet-modal-title" style="margin: 0; font-size: 15px;">Hoja de Cálculo Kortexa</h3>
+        </div>
+        <div class="fortunesheet-header-actions">
+          <button type="button" id="btn-save-fortunesheet-modal" class="modal-btn primary" style="padding: 5px 14px; font-size: 12px; height: auto;">
+            ✓ Aplicar Cambios
+          </button>
+          <button type="button" id="btn-close-fortunesheet-modal" class="modal-btn secondary" style="padding: 5px 10px; font-size: 12px; height: auto;">
+            Cerrar
+          </button>
+        </div>
+      </div>
+      <div id="fortunesheet-modal-workbook" class="fortunesheet-modal-workbook">
+        <!-- Renderizado dinámico -->
+      </div>
+    </div>
+  </div>
+
+  <!-- PANTALLA DE BLOQUEO DE BÓVEDA CIFRADA (CYBERPUNK LOCK SCREEN) -->
+  <div id="vault-lock-screen" class="vault-lock-screen" aria-hidden="true" style="display: none;">
+    <div class="lock-screen-backdrop"></div>
+    <div class="lock-card" role="dialog" aria-modal="true" aria-labelledby="lock-vault-title">
+      <div class="lock-icon-wrapper">
+        <div class="lock-icon-halo"></div>
+        <svg class="lock-svg" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+      </div>
+
+      <h2 id="lock-vault-title" class="lock-title">BÓVEDA PROTEGIDA</h2>
+      <div class="lock-vault-pill">
+        <span class="lock-pill-dot"></span>
+        <span id="lock-vault-name">vault</span>
+        <span class="lock-cipher-tag">AES-256-GCM</span>
+      </div>
+
+      <p class="lock-description">Los archivos de esta bóveda están cifrados físicamente en disco. Ingrese su contraseña maestra para descifrar el contenido.</p>
+
+      <form id="form-unlock-vault" class="lock-form" autocomplete="off">
+        <div class="lock-input-group">
+          <svg class="lock-field-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+          <input type="password" id="input-vault-password" class="lock-input" placeholder="Contraseña maestra..." autofocus required>
+          <button type="button" id="btn-toggle-lock-pwd" class="lock-eye-btn" title="Mostrar/Ocultar contraseña" aria-label="Mostrar u ocultar contraseña">
+            <svg id="lock-eye-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+        </div>
+
+        <div id="lock-error-banner" class="lock-error-banner" style="display: none;"></div>
+
+        <button type="submit" id="btn-submit-unlock" class="lock-submit-btn">
+          <span>Desbloquear Bóveda</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        </button>
+      </form>
+
+      <div class="lock-actions-footer">
+        <button id="btn-lock-switch-other" class="lock-action-btn" type="button">
+          ⇄ Cambiar a otra bóveda
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- INPUT OCULTO PARA CARGA DE MULTIMEDIA Y ARCHIVOS -->
+  <input type="file" id="media-file-input" style="display: none;" multiple accept="image/*,video/*,audio/*,.pdf,.txt">
+
+  <!-- CONTENEDOR DE NOTIFICACIONES TOAST -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <script src="app.js?v=20261106k"></script>
+</body>
+</html>
