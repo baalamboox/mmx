@@ -4,10 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Kortexa — Segundo Cerebro & Red Sináptica</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="alternate icon" type="image/x-icon" href="favicon.ico">
+  <link rel="apple-touch-icon" href="favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261106k">
+  <link rel="stylesheet" href="styles.css?v=20261109mcpv2">
   <script>
     (function() {
       const saved = localStorage.getItem('kortexa-theme') || 'auto';
@@ -23,9 +26,14 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <!-- Force Graph para visualizar la red de notas -->
   <script src="https://unpkg.com/force-graph"></script>
+  <!-- KaTeX para Ecuaciones Matemáticas (LaTeX) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <!-- Mermaid para Diagramas (Flujo, ER, UML, Secuencia, etc.) -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <!-- FortuneSheet (Excel para Kortexa) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortune-sheet/react/dist/index.css">
-  <script type="module" src="fortunesheet-adapter.js?v=20261106f"></script>
+  <script type="module" src="fortunesheet-adapter.js?v=20261109gridlines"></script>
 </head>
 <body>
   <!-- TELÓN DE FONDO PARA MÓVILES (BACKDROP) -->
@@ -220,6 +228,32 @@
         <!-- Renderizado dinámico -->
       </ul>
 
+      <!-- PERFIL DE USUARIO EN SIDEBAR -->
+      <div id="sidebar-user-section" class="sidebar-user-section" style="display: none;">
+        <div class="user-profile-card">
+          <div class="user-avatar-badge" id="user-avatar-badge" title="Mi Cuenta & Seguridad">
+            <span id="user-avatar-initials">U</span>
+          </div>
+          <div class="user-info-text" id="user-info-trigger" title="Mi Cuenta & Seguridad" style="cursor: pointer;">
+            <span id="user-name-display" class="user-name-display">Usuario</span>
+            <span id="user-handle-display" class="user-handle-display">@usuario</span>
+          </div>
+          <button type="button" id="btn-user-settings" class="user-settings-btn" title="Configuración de Cuenta / Cambiar Contraseña">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-user-logout" class="user-logout-btn" title="Cerrar sesión">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+              <polyline points="16 17 21 12 16 7"/>
+              <line x1="21" y1="12" x2="9" y2="12"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
       <!-- PIE DE SIDEBAR CON ESTADO Y SELECTOR DE TEMA -->
       <div class="sidebar-footer">
         <div class="neural-pulse-indicator" id="vault-status-indicator" title="Bóveda local activa (clic para gestionar bóvedas)">
@@ -312,23 +346,143 @@
         <!-- BARRA DE HERRAMIENTAS DE FORMATO (ESTILO WORD / MARKDOWN) -->
         <div class="markdown-toolbar" id="markdown-toolbar" role="toolbar" aria-label="Herramientas de formato Markdown">
           <div class="toolbar-group">
-            <select id="toolbar-heading-select" class="toolbar-select" title="Estilo de Encabezado">
-              <option value="p">Párrafo Normal</option>
-              <option value="h1">Título 1 (H1 — Principal)</option>
-              <option value="h2">Título 2 (H2 — Sección)</option>
-              <option value="h3">Título 3 (H3 — Subtítulo)</option>
-              <option value="h4">Título 4 (H4 — Pequeño)</option>
-              <option value="h5">Título 5 (H5 — Mínimo)</option>
-              <option value="h6">Título 6 (H6 — Etiqueta)</option>
-            </select>
+            <!-- SELECTOR PERSONALIZADO: ENCABEZADOS -->
+            <div class="custom-vault-dropdown custom-toolbar-dropdown" id="toolbar-heading-dropdown">
+              <button type="button" id="toolbar-heading-trigger" class="custom-vault-trigger custom-toolbar-trigger" aria-haspopup="listbox" aria-expanded="false" title="Estilo de Encabezado">
+                <span class="toolbar-dropdown-icon">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 12h16"/>
+                    <path d="M4 6h16"/>
+                    <path d="M4 18h10"/>
+                  </svg>
+                </span>
+                <span id="toolbar-heading-label" class="vault-dropdown-label toolbar-dropdown-label">Párrafo Normal</span>
+                <svg class="vault-dropdown-chevron toolbar-dropdown-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </button>
+              <div id="toolbar-heading-menu" class="custom-vault-menu custom-toolbar-menu" role="listbox" aria-label="Estilos de encabezado">
+                <div class="custom-vault-item custom-toolbar-item active" data-value="p" role="option">
+                  <div class="custom-vault-item-left">
+                    <span class="custom-toolbar-badge">P</span>
+                    <span class="custom-vault-item-name">Párrafo Normal</span>
+                  </div>
+                  <span class="custom-toolbar-hint">Texto</span>
+                </div>
+                <div class="custom-vault-item custom-toolbar-item" data-value="h1" role="option">
+                  <div class="custom-vault-item-left">
+                    <span class="custom-toolbar-badge h1">H1</span>
+                    <span class="custom-vault-item-name">Título 1</span>
+                  </div>
+                  <span class="custom-toolbar-hint"># Principal</span>
+                </div>
+                <div class="custom-vault-item custom-toolbar-item" data-value="h2" role="option">
+                  <div class="custom-vault-item-left">
+                    <span class="custom-toolbar-badge h2">H2</span>
+                    <span class="custom-vault-item-name">Título 2</span>
+                  </div>
+                  <span class="custom-toolbar-hint">## Sección</span>
+                </div>
+                <div class="custom-vault-item custom-toolbar-item" data-value="h3" role="option">
+                  <div class="custom-vault-item-left">
+                    <span class="custom-toolbar-badge h3">H3</span>
+                    <span class="custom-vault-item-name">Título 3</span>
+                  </div>
+                  <span class="custom-toolbar-hint">### Subtítulo</span>
+                </div>
+                <div class="custom-vault-item custom-toolbar-item" data-value="h4" role="option">
+                  <div class="custom-vault-item-left">
+                    <span class="custom-toolbar-badge">H4</span>
+                    <span class="custom-vault-item-name">Título 4</span>
+                  </div>
+                  <span class="custom-toolbar-hint">#### Menor</span>
+                </div>
+                <div class="custom-vault-item custom-toolbar-item" data-value="h5" role="option">
+                  <div class="custom-vault-item-left">
+                    <span class="custom-toolbar-badge">H5</span>
+                    <span class="custom-vault-item-name">Título 5</span>
+                  </div>
+                  <span class="custom-toolbar-hint">##### Mínimo</span>
+                </div>
+                <div class="custom-vault-item custom-toolbar-item" data-value="h6" role="option">
+                  <div class="custom-vault-item-left">
+                    <span class="custom-toolbar-badge">H6</span>
+                    <span class="custom-vault-item-name">Título 6</span>
+                  </div>
+                  <span class="custom-toolbar-hint">###### Etiqueta</span>
+                </div>
+              </div>
+              <select id="toolbar-heading-select" class="toolbar-select visually-hidden" aria-hidden="true" tabindex="-1">
+                <option value="p">Párrafo Normal</option>
+                <option value="h1">Título 1 (H1 — Principal)</option>
+                <option value="h2">Título 2 (H2 — Sección)</option>
+                <option value="h3">Título 3 (H3 — Subtítulo)</option>
+                <option value="h4">Título 4 (H4 — Pequeño)</option>
+                <option value="h5">Título 5 (H5 — Mínimo)</option>
+                <option value="h6">Título 6 (H6 — Etiqueta)</option>
+              </select>
+            </div>
 
-            <select id="toolbar-size-select" class="toolbar-select" title="Tamaño del Texto">
-              <option value="normal">Tamaño Normal</option>
-              <option value="huge">Muy Grande (#)</option>
-              <option value="large">Grande (##)</option>
-              <option value="medium">Mediano (###)</option>
-              <option value="small">Pequeño (&lt;small&gt;)</option>
-            </select>
+            <!-- SELECTOR PERSONALIZADO: TAMAÑO DE TIPOGRAFÍA -->
+            <div class="custom-vault-dropdown custom-toolbar-dropdown" id="toolbar-size-dropdown">
+              <button type="button" id="toolbar-size-trigger" class="custom-vault-trigger custom-toolbar-trigger" aria-haspopup="listbox" aria-expanded="false" title="Tamaño de la Tipografía">
+                <span class="toolbar-dropdown-icon">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="4 7 4 4 20 4 20 7"/>
+                    <line x1="9" y1="20" x2="15" y2="20"/>
+                    <line x1="12" y1="4" x2="12" y2="20"/>
+                  </svg>
+                </span>
+                <span id="toolbar-size-label" class="vault-dropdown-label toolbar-dropdown-label">Tamaño Normal</span>
+                <svg class="vault-dropdown-chevron toolbar-dropdown-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </button>
+              <div id="toolbar-size-menu" class="custom-vault-menu custom-toolbar-menu" role="listbox" aria-label="Tamaño del texto">
+                <div class="custom-vault-item custom-toolbar-item active" data-value="normal" role="option">
+                  <div class="custom-vault-item-left">
+                    <span class="custom-toolbar-badge">100%</span>
+                    <span class="custom-vault-item-name">Tamaño Normal</span>
+                  </div>
+                  <span class="custom-toolbar-hint">Base</span>
+                </div>
+                <div class="custom-vault-item custom-toolbar-item" data-value="huge" role="option">
+                  <div class="custom-vault-item-left">
+                    <span class="custom-toolbar-badge h1">160%</span>
+                    <span class="custom-vault-item-name">Muy Grande</span>
+                  </div>
+                  <span class="custom-toolbar-hint">#</span>
+                </div>
+                <div class="custom-vault-item custom-toolbar-item" data-value="large" role="option">
+                  <div class="custom-vault-item-left">
+                    <span class="custom-toolbar-badge h2">135%</span>
+                    <span class="custom-vault-item-name">Grande</span>
+                  </div>
+                  <span class="custom-toolbar-hint">##</span>
+                </div>
+                <div class="custom-vault-item custom-toolbar-item" data-value="medium" role="option">
+                  <div class="custom-vault-item-left">
+                    <span class="custom-toolbar-badge h3">115%</span>
+                    <span class="custom-vault-item-name">Mediano</span>
+                  </div>
+                  <span class="custom-toolbar-hint">###</span>
+                </div>
+                <div class="custom-vault-item custom-toolbar-item" data-value="small" role="option">
+                  <div class="custom-vault-item-left">
+                    <span class="custom-toolbar-badge">85%</span>
+                    <span class="custom-vault-item-name">Pequeño</span>
+                  </div>
+                  <span class="custom-toolbar-hint">&lt;small&gt;</span>
+                </div>
+              </div>
+              <select id="toolbar-size-select" class="toolbar-select visually-hidden" aria-hidden="true" tabindex="-1">
+                <option value="normal">Tamaño Normal</option>
+                <option value="huge">Muy Grande (#)</option>
+                <option value="large">Grande (##)</option>
+                <option value="medium">Mediano (###)</option>
+                <option value="small">Pequeño (&lt;small&gt;)</option>
+              </select>
+            </div>
           </div>
 
           <div class="toolbar-divider"></div>
@@ -439,6 +593,22 @@
                 <path d="M3 9h18"/>
                 <path d="M3 15h18"/>
                 <path d="M9 3v18"/>
+              </svg>
+            </button>
+            <button type="button" class="toolbar-btn" data-action="math" id="btn-toolbar-math" title="Insertar Ecuación Matemática (LaTeX) [KaTeX]">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 4H6l7 8-7 8h12"/>
+              </svg>
+            </button>
+            <button type="button" class="toolbar-btn" data-action="diagram" id="btn-toolbar-diagram" title="Insertar Diagrama (Flujo, Base de Datos ER, Clases UML, etc.) [Mermaid]">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="7" height="7" rx="1.5"/>
+                <rect x="14" y="3" width="7" height="7" rx="1.5"/>
+                <rect x="14" y="14" width="7" height="7" rx="1.5"/>
+                <rect x="3" y="14" width="7" height="7" rx="1.5"/>
+                <line x1="10" y1="6.5" x2="14" y2="6.5"/>
+                <line x1="6.5" y1="10" x2="6.5" y2="14"/>
+                <line x1="10" y1="17.5" x2="14" y2="17.5"/>
               </svg>
             </button>
             <button type="button" class="toolbar-btn" data-action="hr" title="Línea divisoria (---)">
@@ -877,6 +1047,166 @@
     </div>
   </div>
 
+  <!-- MODAL: ASISTENTE DE ECUACIONES MATEMÁTICAS (LATEX / KATEX) -->
+  <div id="math-equation-modal" class="modal-backdrop" aria-hidden="true">
+    <div class="modal-card math-equation-card" role="dialog" aria-modal="true" aria-labelledby="math-equation-title">
+      <div class="modal-body" style="align-items: flex-start; padding-bottom: 8px;">
+        <div class="modal-icon-badge info" style="background: rgba(99, 102, 241, 0.15); border-color: rgba(99, 102, 241, 0.3); color: #818cf8;">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 4H6l7 8-7 8h12"/>
+          </svg>
+        </div>
+        <div class="modal-content-group" style="width: 100%;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; gap: 8px; flex-wrap: wrap;">
+            <div>
+              <h3 id="math-equation-title" style="margin: 0; font-size: 16px;">Ecuación Matemática (LaTeX)</h3>
+              <p style="margin: 3px 0 0; font-size: 12px; color: var(--text-muted);">Soporta fórmulas en línea ($...$) o bloques de ecuaciones ($$...$$).</p>
+            </div>
+            <!-- Selector de Modo: Bloque o En línea -->
+            <div class="math-mode-pill-group">
+              <button type="button" id="math-mode-block" class="math-mode-pill active" data-mode="block" title="Ecuación en bloque centrada ($$...$$)">Bloque ($$)</button>
+              <button type="button" id="math-mode-inline" class="math-mode-pill" data-mode="inline" title="Ecuación dentro del párrafo ($...$)">En línea ($)</button>
+            </div>
+          </div>
+
+          <!-- Barra de Plantillas Rápidas con 1 Clic -->
+          <div class="math-templates-bar">
+            <span class="math-templates-caption">PLANTILLAS:</span>
+            <button type="button" class="math-chip" data-insert="\frac{a}{b}" title="Fracción">\frac{a}{b}</button>
+            <button type="button" class="math-chip" data-insert="\sqrt{x}" title="Raíz Cuadrada">\sqrt{x}</button>
+            <button type="button" class="math-chip" data-insert="x^{2}" title="Potencia">x^n</button>
+            <button type="button" class="math-chip" data-insert="x_{i}" title="Subíndice">x_i</button>
+            <button type="button" class="math-chip" data-insert="\int_{a}^{b} f(x)\,dx" title="Integral">\int</button>
+            <button type="button" class="math-chip" data-insert="\sum_{i=1}^{n} x_i" title="Sumatoria">\sum</button>
+            <button type="button" class="math-chip" data-insert="\lim_{x \to \infty} f(x)" title="Límite">\lim</button>
+            <button type="button" class="math-chip" data-insert="\alpha" title="Alfa">&alpha;</button>
+            <button type="button" class="math-chip" data-insert="\beta" title="Beta">&beta;</button>
+            <button type="button" class="math-chip" data-insert="\pi" title="Pi">&pi;</button>
+            <button type="button" class="math-chip" data-insert="\theta" title="Theta">&theta;</button>
+            <button type="button" class="math-chip" data-insert="\infty" title="Infinito">&infin;</button>
+            <button type="button" class="math-chip" data-insert="\pm" title="Más/Menos">&plusmn;</button>
+            <button type="button" class="math-chip" data-insert="\begin{pmatrix} a & b \\ c & d \end{pmatrix}" title="Matriz 2x2">Matriz</button>
+          </div>
+
+          <!-- Área de edición de LaTeX -->
+          <div style="margin-top: 10px;">
+            <label for="math-equation-input" style="font-size: 11px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.5px; display: block; margin-bottom: 4px;">CÓDIGO LATEX:</label>
+            <textarea id="math-equation-input" class="modal-input-field math-code-input" rows="3" placeholder="Ej: f(x) = \int_{0}^{\infty} e^{-x^2} dx = \frac{\sqrt{\pi}}{2}" spellcheck="false"></textarea>
+          </div>
+
+          <!-- Previsualización en Tiempo Real -->
+          <div style="margin-top: 10px;">
+            <label style="font-size: 11px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.5px; display: block; margin-bottom: 4px;">VISTA PREVIA EN VIVO:</label>
+            <div id="math-equation-preview" class="math-preview-box">
+              <span class="math-preview-placeholder">Escribe una fórmula o presiona una plantilla para previsualizar...</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 8px;">
+        <button type="button" id="btn-close-math-modal" class="modal-btn secondary">Cancelar</button>
+        <button type="button" id="btn-insert-math-equation" class="modal-btn primary">Insertar Ecuación</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: ASISTENTE DE DIAGRAMAS (MERMAID JS) -->
+  <div id="diagram-modal" class="modal-backdrop" aria-hidden="true">
+    <div class="modal-card diagram-modal-card" role="dialog" aria-modal="true" aria-labelledby="diagram-modal-title">
+      <div class="modal-body" style="align-items: flex-start; padding-bottom: 8px;">
+        <div class="modal-icon-badge info" style="background: rgba(16, 185, 129, 0.15); border-color: rgba(16, 185, 129, 0.3); color: #34d399;">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7" rx="1.5"/>
+            <rect x="14" y="3" width="7" height="7" rx="1.5"/>
+            <rect x="14" y="14" width="7" height="7" rx="1.5"/>
+            <rect x="3" y="14" width="7" height="7" rx="1.5"/>
+            <line x1="10" y1="6.5" x2="14" y2="6.5"/>
+            <line x1="6.5" y1="10" x2="6.5" y2="14"/>
+            <line x1="10" y1="17.5" x2="14" y2="17.5"/>
+          </svg>
+        </div>
+        <div class="modal-content-group" style="width: 100%;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px; flex-wrap: wrap;">
+            <div>
+              <h3 id="diagram-modal-title" style="margin: 0; font-size: 16px;">Creador de Diagramas (Mermaid)</h3>
+              <p style="margin: 3px 0 0; font-size: 12px; color: var(--text-muted);">Genera flujos, bases de datos ER, diagramas UML de clases, secuencias y más.</p>
+            </div>
+          </div>
+
+          <!-- Selector de Tipos de Diagrama -->
+          <div class="diagram-types-scroll" id="diagram-types-nav">
+            <button type="button" class="diagram-type-pill active" data-type="flowchart">🔀 Flujo / Jerárquico</button>
+            <button type="button" class="diagram-type-pill" data-type="brainstorm">💡 Lluvia de Ideas</button>
+            <button type="button" class="diagram-type-pill" data-type="synoptic">📋 Cuadro Sinóptico</button>
+            <button type="button" class="diagram-type-pill" data-type="comparison">⚖️ Cuadro Comparativo</button>
+            <button type="button" class="diagram-type-pill" data-type="foda">📊 Matriz FODA</button>
+            <button type="button" class="diagram-type-pill" data-type="mindmap">🧠 Mapa Mental</button>
+            <button type="button" class="diagram-type-pill" data-type="er">🗄️ Entidad - Relación (BD)</button>
+            <button type="button" class="diagram-type-pill" data-type="class">🧩 Clases (UML)</button>
+            <button type="button" class="diagram-type-pill" data-type="sequence">⏱️ Secuencia</button>
+            <button type="button" class="diagram-type-pill" data-type="state">🔄 Estados</button>
+            <button type="button" class="diagram-type-pill" data-type="gantt">📅 Cronograma (Gantt)</button>
+          </div>
+
+          <!-- Split Editor y Vista Previa del Diagrama -->
+          <div class="diagram-editor-layout">
+            <div class="diagram-editor-col">
+              <label for="diagram-code-input" style="font-size: 11px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.5px; display: block; margin-bottom: 4px;">CÓDIGO MERMAID:</label>
+              <textarea id="diagram-code-input" class="modal-input-field diagram-code-input" rows="11" placeholder="Escribe o edita el código del diagrama..." spellcheck="false"></textarea>
+            </div>
+            <div class="diagram-preview-col">
+              <label style="font-size: 11px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.5px; display: block; margin-bottom: 4px;">VISTA PREVIA EN VIVO:</label>
+              <div id="diagram-live-preview" class="diagram-preview-box">
+                <span class="diagram-preview-placeholder">Generando vista previa...</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 8px;">
+        <button type="button" id="btn-close-diagram-modal" class="modal-btn secondary">Cancelar</button>
+        <button type="button" id="btn-insert-diagram" class="modal-btn primary">Insertar Diagrama en Nota</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: VISOR DE DIAGRAMA EN PANTALLA COMPLETA (PAN & ZOOM) -->
+  <div id="diagram-fullscreen-modal" class="modal-backdrop diagram-fullscreen-backdrop" aria-hidden="true">
+    <div class="diagram-fullscreen-container">
+      <div class="diagram-fullscreen-header">
+        <div class="diagram-fullscreen-title-group">
+          <span class="diagram-badge">DIAGRAMA</span>
+          <span id="diagram-fullscreen-title" class="diagram-fullscreen-title">Vista en Pantalla Completa</span>
+        </div>
+        <div class="diagram-fullscreen-controls">
+          <button type="button" id="btn-fs-diagram-zoom-out" class="diagram-fs-btn" title="Alejar (-)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+          </button>
+          <span id="diagram-fs-zoom-level" class="diagram-fs-zoom-level">100%</span>
+          <button type="button" id="btn-fs-diagram-zoom-in" class="diagram-fs-btn" title="Acercar (+)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+          </button>
+          <button type="button" id="btn-fs-diagram-reset" class="diagram-fs-btn" title="Restablecer (100%)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+          </button>
+          <div class="diagram-fs-divider"></div>
+          <button type="button" id="btn-fs-diagram-close" class="diagram-fs-btn close-btn" title="Salir de pantalla completa (Esc)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            <span>Cerrar</span>
+          </button>
+        </div>
+      </div>
+      <div id="diagram-fullscreen-canvas" class="diagram-fullscreen-canvas">
+        <div id="diagram-fullscreen-content" class="diagram-fullscreen-content">
+          <!-- SVG renderizado se monta aquí -->
+        </div>
+      </div>
+      <div class="diagram-fullscreen-hint">
+        <span>💡 Arrastra con el ratón para moverte • Rueda del ratón para zoom • Tecla Esc para salir</span>
+      </div>
+    </div>
+  </div>
+
   <!-- PANTALLA DE BLOQUEO DE BÓVEDA CIFRADA (CYBERPUNK LOCK SCREEN) -->
   <div id="vault-lock-screen" class="vault-lock-screen" aria-hidden="true" style="display: none;">
     <div class="lock-screen-backdrop"></div>
@@ -931,12 +1261,499 @@
     </div>
   </div>
 
+  <!-- MODAL: PERFIL DE USUARIO Y CONFIGURACIÓN (SEGURIDAD Y MCP) -->
+  <div id="account-modal" class="modal-backdrop" aria-hidden="true">
+    <div class="modal-card account-modal-card" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
+      <!-- Encabezado del Modal -->
+      <div class="modal-header account-modal-header">
+        <div class="account-header-info">
+          <div class="account-header-icon-badge">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+          </div>
+          <div>
+            <h3 id="account-modal-title" class="account-modal-title">Mi Cuenta & Configuración</h3>
+            <p class="account-modal-subtitle">Gestiona tu perfil, seguridad e integración con servidores MCP para IA</p>
+          </div>
+        </div>
+        <button type="button" id="btn-close-account-modal" class="modal-close-btn" title="Cerrar ventana">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="modal-body account-modal-body">
+        <!-- Tarjeta de Identidad de Usuario -->
+        <div class="account-user-card">
+          <div class="account-avatar-wrapper">
+            <div class="account-avatar-circle" id="account-modal-avatar">U</div>
+            <span class="account-status-dot" title="Sesión activa"></span>
+          </div>
+          <div class="account-user-details">
+            <div class="account-user-name-row">
+              <span class="account-fullname" id="account-modal-fullname">Cargando usuario...</span>
+              <span class="account-role-pill">Sesión activa</span>
+            </div>
+            <div class="account-meta-row">
+              <span class="account-badge" id="account-modal-username">@usuario</span>
+              <span class="account-email-item">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+                  <polyline points="22,6 12,13 2,6"/>
+                </svg>
+                <span id="account-modal-email">correo@ejemplo.com</span>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pestañas de Navegación del Modal -->
+        <div class="account-tabs-bar">
+          <button type="button" class="account-tab-btn active" id="btn-account-tab-security" data-tab="security">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            <span>Contraseña & Seguridad</span>
+          </button>
+          <button type="button" class="account-tab-btn" id="btn-account-tab-mcp" data-tab="mcp">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+            </svg>
+            <span>Integración MCP</span>
+            <span id="account-mcp-tab-pill" class="account-mcp-status-pill active">Activo</span>
+          </button>
+        </div>
+
+        <!-- CONTENIDO PESTAÑA 1: SEGURIDAD Y CONTRASEÑA -->
+        <div id="account-panel-security" class="account-tab-panel active">
+          <!-- Formulario de Cambio de Contraseña -->
+          <form id="form-change-password" class="account-password-form" autocomplete="off">
+            <div class="account-form-header-row">
+              <h4 class="account-form-section-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                </svg>
+                <span>Actualizar Contraseña</span>
+              </h4>
+              <button type="button" id="btn-generate-password" class="account-gen-pwd-btn" title="Generar una contraseña segura aleatoria">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                </svg>
+                <span>Generar contraseña</span>
+              </button>
+            </div>
+
+            <!-- Contraseña actual -->
+            <div class="auth-field-group">
+              <div class="account-label-row">
+                <label for="chg-current-password" class="auth-label">Contraseña Actual <span class="required-star">*</span></label>
+                <span id="caps-lock-warning-current" class="account-caps-pill" style="display: none;">⚠️ Bloq Mayús activo</span>
+              </div>
+              <div class="auth-input-wrapper">
+                <div class="auth-input-icon">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="8" cy="15" r="4"/>
+                    <line x1="10.85" y1="12.15" x2="19" y2="4"/>
+                    <line x1="18" y1="5" x2="20" y2="7"/>
+                    <line x1="15" y1="8" x2="17" y2="10"/>
+                  </svg>
+                </div>
+                <input type="password" id="chg-current-password" class="auth-input has-icon" placeholder="Ingresa tu contraseña actual" required autocomplete="current-password">
+                <button type="button" id="btn-toggle-chg-current-pwd" class="auth-eye-btn" title="Mostrar/ocultar contraseña">
+                  <svg class="eye-open-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                    <circle cx="12" cy="12" r="3"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <!-- Nueva contraseña y Confirmación en columnas -->
+            <div class="account-inputs-grid">
+              <div class="auth-field-group">
+                <div class="account-label-row">
+                  <label for="chg-new-password" class="auth-label">Nueva Contraseña <span class="required-star">*</span></label>
+                  <span id="caps-lock-warning-new" class="account-caps-pill" style="display: none;">⚠️ Bloq Mayús</span>
+                </div>
+                <div class="auth-input-wrapper">
+                  <div class="auth-input-icon">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                      <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                    </svg>
+                  </div>
+                  <input type="password" id="chg-new-password" class="auth-input has-icon" placeholder="Mínimo 8 caracteres" minlength="8" required autocomplete="new-password">
+                  <button type="button" id="btn-toggle-chg-new-pwd" class="auth-eye-btn" title="Mostrar/ocultar contraseña">
+                    <svg class="eye-open-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                      <circle cx="12" cy="12" r="3"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              <div class="auth-field-group">
+                <div class="account-label-row">
+                  <label for="chg-confirm-new-password" class="auth-label">Confirmar Contraseña <span class="required-star">*</span></label>
+                  <span id="match-indicator-badge" class="account-match-pill" style="display: none;"></span>
+                </div>
+                <div class="auth-input-wrapper">
+                  <div class="auth-input-icon">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                      <polyline points="9 12 11 14 15 10"/>
+                    </svg>
+                  </div>
+                  <input type="password" id="chg-confirm-new-password" class="auth-input has-icon" placeholder="Repite tu contraseña" minlength="8" required autocomplete="new-password">
+                  <button type="button" id="btn-toggle-chg-confirm-pwd" class="auth-eye-btn" title="Mostrar/ocultar contraseña">
+                    <svg class="eye-open-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                      <circle cx="12" cy="12" r="3"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Medidor de Fortaleza de Contraseña -->
+            <div class="account-strength-container" id="account-strength-box">
+              <div class="account-strength-header">
+                <span class="account-strength-title">Fortaleza de contraseña:</span>
+                <span id="chg-strength-label" class="account-strength-level">Ingresa una contraseña</span>
+              </div>
+              <div class="account-strength-bars">
+                <div class="strength-bar-seg" id="strength-seg-1"></div>
+                <div class="strength-bar-seg" id="strength-seg-2"></div>
+                <div class="strength-bar-seg" id="strength-seg-3"></div>
+                <div class="strength-bar-seg" id="strength-seg-4"></div>
+              </div>
+            </div>
+
+            <!-- Requisitos Dinámicos -->
+            <div class="account-req-grid">
+              <div class="account-req-item" id="req-length">
+                <span class="req-icon">○</span>
+                <span>Mínimo 8 caracteres</span>
+              </div>
+              <div class="account-req-item" id="req-cases">
+                <span class="req-icon">○</span>
+                <span>Mayúscula y minúscula</span>
+              </div>
+              <div class="account-req-item" id="req-number-sym">
+                <span class="req-icon">○</span>
+                <span>Número o símbolo (!?#$)</span>
+              </div>
+              <div class="account-req-item" id="req-match">
+                <span class="req-icon">○</span>
+                <span>Contraseñas coinciden</span>
+              </div>
+            </div>
+
+            <div id="chg-pwd-error-banner" class="auth-error-banner" style="display: none; margin: 12px 0 6px;"></div>
+            <div id="chg-pwd-success-banner" class="auth-success-banner" style="display: none; margin: 12px 0 6px;"></div>
+
+            <div class="account-modal-actions">
+              <button type="button" id="btn-cancel-chg-pwd" class="modal-btn secondary">Cancelar</button>
+              <button type="submit" id="btn-submit-chg-pwd" class="modal-btn primary account-btn-submit">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                  <polyline points="17 21 17 13 7 13 7 21"/>
+                  <polyline points="7 3 7 8 15 8"/>
+                </svg>
+                <span id="btn-submit-chg-pwd-text">Guardar Contraseña</span>
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <!-- CONTENIDO PESTAÑA 2: INTEGRACIÓN MCP -->
+        <div id="account-panel-mcp" class="account-tab-panel" style="display: none;">
+          <!-- Tarjeta de Control Principal del Servidor MCP -->
+          <div class="account-mcp-hero-card">
+            <div class="account-mcp-hero-top">
+              <div class="account-mcp-hero-info">
+                <div class="account-mcp-hero-badge">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="4" y="4" width="16" height="16" rx="2"/>
+                    <rect x="9" y="9" width="6" height="6"/>
+                    <line x1="9" y1="1" x2="9" y2="4"/>
+                    <line x1="15" y1="1" x2="15" y2="4"/>
+                    <line x1="9" y1="20" x2="9" y2="23"/>
+                    <line x1="15" y1="20" x2="15" y2="23"/>
+                    <line x1="20" y1="9" x2="23" y2="9"/>
+                    <line x1="20" y1="14" x2="23" y2="14"/>
+                    <line x1="1" y1="9" x2="4" y2="9"/>
+                    <line x1="1" y1="14" x2="4" y2="14"/>
+                  </svg>
+                </div>
+                <div class="account-mcp-hero-text">
+                  <h4 class="account-mcp-hero-title">Model Context Protocol (MCP)</h4>
+                  <p class="account-mcp-hero-desc">Permite a asistentes como Claude Desktop, Antigravity o Cursor consultar, buscar y editar notas en tu bóveda.</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Fila del Switch de Habilitación -->
+            <div class="account-mcp-toggle-row">
+              <div class="account-mcp-toggle-labels">
+                <span class="account-mcp-toggle-title">Habilitar Servidor MCP</span>
+                <span class="account-mcp-toggle-subtitle" id="mcp-toggle-desc">Permite conexiones y consultas de agentes de IA autorizados</span>
+              </div>
+              <div class="account-mcp-toggle-controls">
+                <span id="mcp-status-text-badge" class="account-mcp-status-pill active">Habilitado</span>
+                <label class="account-toggle-switch">
+                  <input type="checkbox" id="mcp-toggle-switch" checked>
+                  <span class="account-toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Credenciales y Configuración de Conexión MCP -->
+          <div id="mcp-config-details-section" class="account-mcp-details">
+            <!-- Token de Acceso MCP en fila adaptativa -->
+            <div class="auth-field-group">
+              <div class="account-label-row">
+                <label for="mcp-token-input" class="auth-label">Token de Acceso MCP <span class="required-star">*</span></label>
+                <span class="account-label-hint">Autentica tu cliente de IA</span>
+              </div>
+              <div class="account-token-action-group">
+                <div class="auth-input-wrapper account-token-input-wrapper">
+                  <div class="auth-input-icon">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="8" cy="15" r="4"/>
+                      <line x1="10.85" y1="12.15" x2="19" y2="4"/>
+                      <line x1="18" y1="5" x2="20" y2="7"/>
+                    </svg>
+                  </div>
+                  <input type="password" id="mcp-token-input" class="auth-input has-icon account-token-input" readonly>
+                  <button type="button" id="btn-toggle-mcp-token" class="auth-eye-btn" title="Mostrar/ocultar token">
+                    <svg class="eye-open-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                      <circle cx="12" cy="12" r="3"/>
+                    </svg>
+                  </button>
+                </div>
+                <button type="button" id="btn-copy-mcp-token" class="modal-btn secondary account-token-copy-btn" title="Copiar token al portapapeles">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                  </svg>
+                  <span>Copiar</span>
+                </button>
+              </div>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; margin-top: -6px;">
+              <button type="button" id="btn-regen-mcp-token" class="account-text-action-btn">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M23 4v6h-6M1 20v-6h6"/>
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                </svg>
+                <span>Regenerar nuevo token</span>
+              </button>
+            </div>
+
+            <!-- Snippet de Configuración JSON para Claude Desktop / Antigravity -->
+            <div class="account-mcp-snippet-box">
+              <div class="account-mcp-snippet-header">
+                <span class="account-mcp-snippet-title">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="16 18 22 12 16 6"/>
+                    <polyline points="8 6 2 12 8 18"/>
+                  </svg>
+                  <span>Configuración Claude Desktop (`claude_desktop_config.json`)</span>
+                </span>
+                <button type="button" id="btn-copy-mcp-config" class="account-gen-pwd-btn">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                  </svg>
+                  <span>Copiar JSON</span>
+                </button>
+              </div>
+              <pre class="account-mcp-code-block" id="mcp-config-snippet-code">Cargando configuración...</pre>
+            </div>
+
+            <!-- Herramientas expuestas (Capabilities) -->
+            <div class="account-mcp-tools-box">
+              <span class="account-mcp-tools-title">Herramientas MCP habilitadas:</span>
+              <div class="account-mcp-tools-chips">
+                <span class="account-mcp-chip">📄 list_notes</span>
+                <span class="account-mcp-chip">🔍 search_notes</span>
+                <span class="account-mcp-chip">📖 read_note</span>
+                <span class="account-mcp-chip">📁 list_folders</span>
+                <span class="account-mcp-chip">✏️ create_or_update_note</span>
+                <span class="account-mcp-chip">📝 append_to_note</span>
+                <span class="account-mcp-chip">🕸️ get_graph_connections</span>
+              </div>
+            </div>
+
+            <div class="account-modal-actions" style="margin-top: 8px;">
+              <button type="button" id="btn-close-mcp-panel" class="modal-btn secondary">Cerrar</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL / PANTALLA DE AUTENTICACIÓN (LOGIN Y REGISTRO) -->
+  <div id="auth-modal" class="auth-modal-screen" aria-hidden="true" style="display: none;">
+    <div class="auth-modal-backdrop"></div>
+    <div class="auth-card" role="dialog" aria-modal="true" aria-labelledby="auth-card-title">
+      <div class="auth-header">
+        <div class="auth-brand-badge">
+          <svg class="cortex-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2a4 4 0 0 0-4 4v1a4 4 0 0 0-3 3.87A4 4 0 0 0 2 15a4 4 0 0 0 4 4h1a4 4 0 0 0 3.87 3 4 4 0 0 0 4.26 0A4 4 0 0 0 19 19h1a4 4 0 0 0 4-4 4 4 0 0 0-3-4.13A4 4 0 0 0 16 7V6a4 4 0 0 0-4-4z"/>
+            <path d="M12 2v20M8 8c0 2.2 1.8 4 4 4s4-1.8 4-4M6 14c0 2 2 3.5 4 4"/>
+          </svg>
+        </div>
+        <h2 id="auth-card-title" class="auth-title">KORTEXA</h2>
+        <p class="auth-subtitle">Accede a tu Segundo Cerebro & Red Sináptica</p>
+      </div>
+
+      <!-- Selector de Modo: Iniciar Sesión / Crear Cuenta -->
+      <div class="auth-tabs-nav">
+        <button type="button" id="tab-btn-login" class="auth-tab-btn active">Iniciar Sesión</button>
+        <button type="button" id="tab-btn-register" class="auth-tab-btn">Crear Cuenta</button>
+      </div>
+
+      <!-- FORMULARIO DE INICIO DE SESIÓN -->
+      <form id="form-login" class="auth-form" autocomplete="on">
+        <div class="auth-field-group">
+          <label for="login-identifier" class="auth-label">Usuario o Correo Electrónico</label>
+          <div class="auth-input-wrapper">
+            <svg class="auth-input-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+            <input type="text" id="login-identifier" class="auth-input" placeholder="ej. usuario o correo@dominio.com" required autocomplete="username">
+          </div>
+        </div>
+
+        <div class="auth-field-group">
+          <label for="login-password" class="auth-label">Contraseña</label>
+          <div class="auth-input-wrapper">
+            <svg class="auth-input-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            <input type="password" id="login-password" class="auth-input" placeholder="Tu contraseña..." required autocomplete="current-password">
+            <button type="button" id="btn-toggle-login-pwd" class="auth-eye-btn" title="Mostrar/ocultar contraseña" aria-label="Mostrar u ocultar contraseña">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                <circle cx="12" cy="7" r="3"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div id="login-error-banner" class="auth-error-banner" style="display: none;"></div>
+
+        <button type="submit" id="btn-submit-login" class="auth-submit-btn">
+          <span>Ingresar a Kortexa</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        </button>
+
+        <p class="auth-switch-text">
+          ¿No tienes una cuenta? <a href="#" id="link-goto-register">Regístrate gratis aquí</a>
+        </p>
+      </form>
+
+      <!-- FORMULARIO DE REGISTRO DE CUENTA -->
+      <form id="form-register" class="auth-form" autocomplete="off" style="display: none;">
+        <div class="auth-field-group">
+          <label for="register-nombres" class="auth-label">Nombre(s) <span class="required-star">*</span></label>
+          <div class="auth-input-wrapper">
+            <svg class="auth-input-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+            <input type="text" id="register-nombres" class="auth-input" placeholder="ej. Guillermo" required autocomplete="given-name">
+          </div>
+        </div>
+
+        <div class="auth-form-row">
+          <div class="auth-field-group">
+            <label for="register-paterno" class="auth-label">Apellido Paterno <span class="required-star">*</span></label>
+            <div class="auth-input-wrapper">
+              <input type="text" id="register-paterno" class="auth-input" placeholder="ej. Jiménez" required autocomplete="family-name">
+            </div>
+          </div>
+          <div class="auth-field-group">
+            <label for="register-materno" class="auth-label">Apellido Materno <span class="required-star">*</span></label>
+            <div class="auth-input-wrapper">
+              <input type="text" id="register-materno" class="auth-input" placeholder="ej. López" required autocomplete="additional-name">
+            </div>
+          </div>
+        </div>
+
+        <div class="auth-field-group">
+          <label for="register-email" class="auth-label">Correo Electrónico <span class="required-star">*</span></label>
+          <div class="auth-input-wrapper">
+            <svg class="auth-input-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+              <polyline points="22,6 12,13 2,6"/>
+            </svg>
+            <input type="email" id="register-email" class="auth-input" placeholder="correo@ejemplo.com" required autocomplete="email">
+          </div>
+        </div>
+
+        <div class="auth-field-group">
+          <label for="register-username" class="auth-label">Nombre de Usuario <span class="required-star">*</span></label>
+          <div class="auth-input-wrapper">
+            <span class="auth-input-prefix">@</span>
+            <input type="text" id="register-username" class="auth-input has-prefix" placeholder="usuario" required autocomplete="username" pattern="[a-zA-Z0-9._-]{3,}">
+          </div>
+          <span class="auth-field-hint">Mínimo 3 caracteres (sin espacios).</span>
+        </div>
+
+        <div class="auth-form-row">
+          <div class="auth-field-group">
+            <label for="register-password" class="auth-label">Contraseña <span class="required-star">*</span></label>
+            <div class="auth-input-wrapper">
+              <input type="password" id="register-password" class="auth-input" placeholder="Mínimo 8 caracteres" minlength="8" required autocomplete="new-password">
+            </div>
+          </div>
+          <div class="auth-field-group">
+            <label for="register-confirm-password" class="auth-label">Confirmar Contraseña <span class="required-star">*</span></label>
+            <div class="auth-input-wrapper">
+              <input type="password" id="register-confirm-password" class="auth-input" placeholder="Repite contraseña" minlength="8" required autocomplete="new-password">
+            </div>
+          </div>
+        </div>
+
+        <div id="register-error-banner" class="auth-error-banner" style="display: none;"></div>
+        <div id="register-success-banner" class="auth-success-banner" style="display: none;"></div>
+
+        <button type="submit" id="btn-submit-register" class="auth-submit-btn">
+          <span>Crear Mi Cuenta</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        </button>
+
+        <p class="auth-switch-text">
+          ¿Ya tienes cuenta? <a href="#" id="link-goto-login">Inicia sesión aquí</a>
+        </p>
+      </form>
+    </div>
+  </div>
+
   <!-- INPUT OCULTO PARA CARGA DE MULTIMEDIA Y ARCHIVOS -->
   <input type="file" id="media-file-input" style="display: none;" multiple accept="image/*,video/*,audio/*,.pdf,.txt">
 
   <!-- CONTENEDOR DE NOTIFICACIONES TOAST -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <script src="app.js?v=20261106k"></script>
+  <script src="app.js?v=20261109mcpv2"></script>
 </body>
 </html>

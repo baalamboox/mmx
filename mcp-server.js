@@ -10,8 +10,14 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// URL de la API de la aplicación web (por defecto localhost:3000/api, o tu URL en producción)
-const VAULT_API_URL = process.env.VAULT_API_URL || 'http://localhost:3000/api';
+// URL de la API de la aplicación web (soporta HTTP y HTTPS con certificados locales)
+const hasCerts = fsSync.existsSync(path.join(__dirname, 'certs', 'cert.pem'));
+const defaultApiUrl = hasCerts ? 'https://localhost:3000/api' : 'http://localhost:3000/api';
+const VAULT_API_URL = process.env.VAULT_API_URL || defaultApiUrl;
+
+if (VAULT_API_URL.startsWith('https://localhost') || VAULT_API_URL.startsWith('https://127.0.0.1')) {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+}
 const MAGIC = Buffer.from('KENC');
 
 function isEncrypted(buffer) {
@@ -91,23 +97,34 @@ async function localScanFiles(dir = null, base = null) {
 async function fetchApi(endpoint, options = {}) {
   try {
     const url = `${VAULT_API_URL}${endpoint}`;
-    let res = await fetch(url, options);
+    const headers = {
+      'X-MCP-Request': '1',
+      ...(options.headers || {})
+    };
+    if (process.env.VAULT_AUTH_TOKEN && !headers['Authorization']) {
+      headers['Authorization'] = `Bearer ${process.env.VAULT_AUTH_TOKEN}`;
+    }
+    const fetchOptions = { ...options, headers };
+    let res = await fetch(url, fetchOptions);
 
     // Si la bóveda está bloqueada y tenemos VAULT_PASSWORD configurado, intentamos auto-desbloquear
     if (res.status === 423 && process.env.VAULT_PASSWORD) {
       const unlockRes = await fetch(`${VAULT_API_URL}/vault/unlock`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-MCP-Request': '1', ...(process.env.VAULT_AUTH_TOKEN ? { 'Authorization': `Bearer ${process.env.VAULT_AUTH_TOKEN}` } : {}) },
         body: JSON.stringify({ password: process.env.VAULT_PASSWORD })
       });
       if (unlockRes.ok) {
         // Reintentar la petición original
-        res = await fetch(url, options);
+        res = await fetch(url, fetchOptions);
       }
     }
 
     if (!res.ok) {
       const errBody = await res.json().catch(() => ({}));
+      if (errBody.mcp_disabled) {
+        throw new Error('⚠️ El acceso al servidor MCP está deshabilitado para esta cuenta en la configuración de Kortexa. Habilítalo en los ajustes de tu usuario.');
+      }
       throw new Error(errBody.error || `HTTP ${res.status}: ${res.statusText}`);
     }
     return await res.json();

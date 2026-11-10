@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "mcp": "node mcp-server.js"
+    "mcp": "node mcp-server.js",
+    "certs": "node scripts/generate-certs.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

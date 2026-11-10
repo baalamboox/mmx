@@ -46,7 +46,10 @@ export async function loadFortuneSheet() {
 export function convertToFortuneSheetData(rawData) {
   // 1. Si ya es una estructura válida de Sheet[]
   if (Array.isArray(rawData) && rawData.length > 0 && typeof rawData[0] === 'object' && !Array.isArray(rawData[0])) {
-    return rawData;
+    return rawData.map(sheet => ({
+      ...sheet,
+      showGridLines: sheet.showGridLines !== undefined ? sheet.showGridLines : 1
+    }));
   }
 
   // 2. Si es un array 2D: [["A", "B"], [1, 2]]
@@ -101,6 +104,7 @@ export function convertToFortuneSheetData(rawData) {
       id: 'sheet_01',
       row: rowCount,
       column: colCount,
+      showGridLines: 1,
       data
     }
   ];
@@ -189,6 +193,7 @@ export async function mountFortuneSheet(containerEl, initialData, options = {}) 
     lang: 'es',
     showToolbar: options.showToolbar !== false,
     showGrid: true,
+    showGridLines: true,
     showFormulaBar: options.showFormulaBar !== false,
     showSheetTabs: options.showSheetTabs !== false,
     onChange: (updatedData) => {

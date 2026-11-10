@@ -1,10 +1,31 @@
 import express from 'express';
 import cors from 'cors';
+import https from 'https';
+import http from 'http';
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import {
+  registerUser,
+  loginUser,
+  validateSession,
+  deleteSession,
+  getUserCount,
+  getUserVaults,
+  getUserActiveVault,
+  setUserActiveVault,
+  addUserVault,
+  removeUserVault,
+  renameUserVault,
+  updateUserVaultEncryption,
+  changeUserPassword,
+  getUserMcpSettings,
+  setUserMcpEnabled,
+  regenerateUserMcpToken,
+  validateMcpToken
+} from './auth-db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -91,69 +112,141 @@ function saveConfig(cfg) {
   }
 }
 
-let config = loadConfig();
-let VAULT_DIR = path.isAbsolute(config.vaultDir) 
-  ? config.vaultDir 
-  : path.join(__dirname, config.vaultDir);
-
-// Estado en memoria de la clave activa de la bóveda
-let activeVaultKey = null;
-let activeVaultSalt = null;
-
-function tryAutoUnlock() {
-  const currentVault = path.basename(VAULT_DIR);
-  const meta = config.vaultsMeta?.[currentVault];
-  if (meta?.encrypted && process.env.VAULT_PASSWORD) {
-    try {
-      const salt = Buffer.from(meta.salt, 'hex');
-      const key = deriveKey(process.env.VAULT_PASSWORD, salt);
-      const hash = createVerificationHash(key);
-      if (crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(meta.verificationHash, 'hex'))) {
-        activeVaultKey = key;
-        activeVaultSalt = salt;
-        console.log(`🔓 Bóveda "${currentVault}" desbloqueada automáticamente mediante VAULT_PASSWORD.`);
-      }
-    } catch (err) {
-      console.warn('Fallo al auto-desbloquear bóveda:', err.message);
-    }
-  }
+// ==========================================
+// BÓVEDAS AISLADAS POR USUARIO (SANDBOX MULTI-USUARIO)
+// ==========================================
+const USER_VAULTS_ROOT = path.join(__dirname, 'vaults');
+if (!fsSync.existsSync(USER_VAULTS_ROOT)) {
+  fsSync.mkdirSync(USER_VAULTS_ROOT, { recursive: true });
 }
-tryAutoUnlock();
+
+function getUserFolderName(user) {
+  return String(user.username || user.id).toLowerCase().replace(/[^a-z0-9_.-]/g, '');
+}
+
+function getUserVaultsDir(user) {
+  return path.join(USER_VAULTS_ROOT, getUserFolderName(user));
+}
+
+function getUserVaultDir(user, vaultName) {
+  const cleanVault = String(vaultName || '').replace(/[<>:"/\\|?*]/g, '').trim();
+  return path.join(getUserVaultsDir(user), cleanVault);
+}
+
+function resolveUserVaultPath(user, vaultName, relativePath) {
+  const baseVaultDir = getUserVaultDir(user, vaultName);
+  const safeRelative = path.normalize(relativePath || '').replace(/^(\.\.[\/\\])+/, '');
+  const fullPath = path.join(baseVaultDir, safeRelative);
+  if (!fullPath.startsWith(baseVaultDir)) {
+    const err = new Error('Acceso no autorizado fuera de la bóveda');
+    err.code = 'FORBIDDEN';
+    throw err;
+  }
+  return fullPath;
+}
+
+// Mapa en memoria de claves activas por usuario y bóveda: `${userId}:${vaultName}` -> { key: Buffer, salt: Buffer }
+const activeUserVaultKeys = new Map();
+
+function getActiveVaultKey(userId, vaultName) {
+  return activeUserVaultKeys.get(`${userId}:${vaultName}`);
+}
+
+function setActiveVaultKey(userId, vaultName, key, salt) {
+  activeUserVaultKeys.set(`${userId}:${vaultName}`, { key, salt });
+}
+
+function clearActiveVaultKey(userId, vaultName) {
+  activeUserVaultKeys.delete(`${userId}:${vaultName}`);
+}
+
+// Asegurar que el usuario tenga su directorio en disco y al menos una bóveda activa registrada
+async function ensureUserVault(user) {
+  if (!user || !user.id) throw new Error('Usuario no válido');
+  const userDir = getUserVaultsDir(user);
+  await fs.mkdir(userDir, { recursive: true });
+
+  let activeVault = getUserActiveVault(user.id);
+
+  // Migración automática para memo69 (o primer usuario registrado) si existen carpetas previas en la raíz
+  if (!activeVault && (user.username === 'memo69' || user.id === 8 || user.id === 3)) {
+    const rootMemong = path.join(__dirname, 'memong');
+    const userMemong = path.join(userDir, 'memong');
+    if (fsSync.existsSync(rootMemong)) {
+      if (!fsSync.existsSync(userMemong)) {
+        try {
+          await fs.cp(rootMemong, userMemong, { recursive: true });
+        } catch (e) {
+          console.error('Error migrando memong a carpeta de usuario:', e);
+        }
+      }
+      try {
+        addUserVault(user.id, 'memong', true, true, 'fecc23690f074c81df916399c968b875', '9bcbcd82cea0f0eaace009faebdd8a39fa6e8bc6afa2072540f1230d66b22cac');
+      } catch {}
+    }
+
+    const rootProyectos = path.join(__dirname, 'Proyectos');
+    const userProyectos = path.join(userDir, 'Proyectos');
+    if (fsSync.existsSync(rootProyectos)) {
+      if (!fsSync.existsSync(userProyectos)) {
+        try {
+          await fs.cp(rootProyectos, userProyectos, { recursive: true });
+        } catch (e) {
+          console.error('Error migrando Proyectos a carpeta de usuario:', e);
+        }
+      }
+      try {
+        addUserVault(user.id, 'Proyectos', false, false);
+      } catch {}
+    }
+
+    activeVault = getUserActiveVault(user.id);
+  }
+
+  // Si aún no tiene ninguna bóveda, crear bóveda personal por defecto
+  if (!activeVault) {
+    const defaultName = 'Mi-Boveda';
+    const defaultVaultDir = path.join(userDir, defaultName);
+    await fs.mkdir(defaultVaultDir, { recursive: true });
+    const welcomeNote = `# Mi Espacio de Conocimiento 🧠\n\n¡Bienvenido a tu espacio privado en **Kortexa**, **${user.nombres || user.username}**!\n\nEsta bóveda es totalmente privada y aislada de los demás usuarios.\n\n- Crea tus pensamientos usando el botón **+** en la barra lateral.\n- Conecta ideas utilizando enlaces de doble corchete como [[Ideas]].\n- Explora tu red sináptica en la vista de **Grafo**.\n`;
+    await fs.writeFile(path.join(defaultVaultDir, 'Bienvenida.md'), welcomeNote, 'utf-8');
+    activeVault = addUserVault(user.id, defaultName, true, false);
+  }
+
+  return activeVault;
+}
 
 // Lectura y Escritura Segura con Cifrado Transparente
-async function readVaultFileBuffer(fullPath) {
+async function readVaultFileBuffer(fullPath, activeKey = null) {
   const raw = await fs.readFile(fullPath);
   if (isEncrypted(raw)) {
-    if (!activeVaultKey) {
+    if (!activeKey) {
       const err = new Error('Bóveda bloqueada');
       err.code = 'LOCKED';
       throw err;
     }
-    return decryptBuffer(raw, activeVaultKey);
+    return decryptBuffer(raw, activeKey.key);
   }
   return raw;
 }
 
-async function readVaultFileText(fullPath) {
-  const buf = await readVaultFileBuffer(fullPath);
+async function readVaultFileText(fullPath, activeKey = null) {
+  const buf = await readVaultFileBuffer(fullPath, activeKey);
   return buf.toString('utf-8');
 }
 
-async function writeVaultFile(fullPath, contentOrBuffer) {
+async function writeVaultFile(fullPath, contentOrBuffer, isEncrypted = false, activeKey = null) {
   const buf = Buffer.isBuffer(contentOrBuffer) 
     ? contentOrBuffer 
     : Buffer.from(contentOrBuffer ?? '', 'utf-8');
 
-  const currentVault = path.basename(VAULT_DIR);
-  const meta = config.vaultsMeta?.[currentVault];
-
-  if (meta?.encrypted) {
-    if (!activeVaultKey) {
+  if (isEncrypted) {
+    if (!activeKey) {
       const err = new Error('Bóveda bloqueada');
       err.code = 'LOCKED';
       throw err;
     }
-    const encryptedBuf = encryptBuffer(buf, activeVaultKey, activeVaultSalt);
+    const encryptedBuf = encryptBuffer(buf, activeKey.key, activeKey.salt);
     await fs.writeFile(fullPath, encryptedBuf);
   } else {
     await fs.writeFile(fullPath, buf);
@@ -198,18 +291,28 @@ async function decryptDirectory(dir, key) {
   }
 }
 
-// Middleware de verificación de bloqueo
-function checkVaultLock(req, res, next) {
-  const currentVault = path.basename(VAULT_DIR);
-  const meta = config.vaultsMeta?.[currentVault];
-  if (meta?.encrypted && !activeVaultKey) {
-    return res.status(423).json({
-      error: 'Bóveda bloqueada. Ingrese su contraseña maestra para acceder.',
-      locked: true,
-      vault: currentVault
-    });
+// Middleware de verificación de bóveda y bloqueo para el usuario actual
+async function checkVaultLock(req, res, next) {
+  try {
+    const activeVault = await ensureUserVault(req.user);
+    req.userVault = activeVault;
+    req.userVaultDir = getUserVaultDir(req.user, activeVault.name);
+
+    if (activeVault.encrypted) {
+      const activeKey = getActiveVaultKey(req.user.id, activeVault.name);
+      if (!activeKey) {
+        return res.status(423).json({
+          error: 'Bóveda bloqueada. Ingrese su contraseña maestra para acceder.',
+          locked: true,
+          vault: activeVault.name
+        });
+      }
+      req.userVaultKey = activeKey;
+    }
+    next();
+  } catch (err) {
+    res.status(500).json({ error: 'Error al acceder a la bóveda', details: err.message });
   }
-  next();
 }
 
 const app = express();
@@ -227,6 +330,83 @@ app.use(express.static(path.join(__dirname, 'public'), {
     res.setHeader('Expires', '0');
   }
 }));
+
+// Funciones y Middlewares de Autenticación
+function parseCookies(req) {
+  const cookieHeader = req.headers.cookie;
+  if (!cookieHeader) return {};
+  const cookies = {};
+  for (const item of cookieHeader.split(';')) {
+    const [name, ...val] = item.trim().split('=');
+    if (name) {
+      cookies[name] = decodeURIComponent(val.join('='));
+    }
+  }
+  return cookies;
+}
+
+function authMiddleware(req, res, next) {
+  let token = null;
+  const authHeader = req.headers['authorization'];
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.substring(7).trim();
+  } else if (req.headers['x-auth-token']) {
+    token = req.headers['x-auth-token'];
+  } else {
+    const cookies = parseCookies(req);
+    if (cookies.kortexa_token) {
+      token = cookies.kortexa_token;
+    } else if (req.query?.auth_token) {
+      token = req.query.auth_token;
+    }
+  }
+
+  if (token) {
+    try {
+      let user = validateSession(token);
+      let isMcpToken = false;
+      if (!user) {
+        user = validateMcpToken(token);
+        if (user) isMcpToken = true;
+      }
+      if (user) {
+        req.user = user;
+        req.authToken = token;
+        req.isMcpToken = isMcpToken;
+      }
+    } catch {}
+  }
+
+  // Comprobar si la petición proviene de un cliente MCP y si el usuario tiene deshabilitado MCP
+  const isMcpReq = req.isMcpToken || req.headers['x-mcp-request'] === '1' || req.query?.mcp === '1';
+  if (isMcpReq && req.user && req.user.mcp_enabled === false) {
+    return res.status(403).json({
+      error: 'El acceso al servidor MCP está deshabilitado para esta cuenta en la configuración de Kortexa.',
+      code: 'MCP_DISABLED',
+      mcp_disabled: true
+    });
+  }
+
+  next();
+}
+
+app.use(authMiddleware);
+
+function requireAuth(req, res, next) {
+  const totalUsers = getUserCount();
+  // Si no hay usuarios en la base de datos, permitimos acceso para configuración inicial
+  if (totalUsers === 0) {
+    return next();
+  }
+
+  if (!req.user) {
+    return res.status(401).json({
+      error: 'Autenticación requerida. Inicie sesión para continuar.',
+      code: 'AUTH_REQUIRED'
+    });
+  }
+  next();
+}
 
 // Regex para enlaces tipo [[Nombre de Nota]] o ![[Archivo.ext]]
 const WIKI_LINK_REGEX = /!?\[\[(.*?)\]\]/g;
@@ -248,15 +428,13 @@ function getFileType(ext) {
   return 'other';
 }
 
-// Asegurar que la carpeta vault exista
-await fs.mkdir(VAULT_DIR, { recursive: true });
-
 // ==========================================
 // FUNCIONES AUXILIARES RECURSIVAS
 // ==========================================
 
-// Escanear todos los archivos del vault recursivamente (notas y archivos multimedia)
-async function getAllVaultFiles(dir = VAULT_DIR, base = VAULT_DIR) {
+// Escanear todos los archivos de un vault recursivamente (notas y archivos multimedia)
+async function getAllVaultFiles(dir, base = dir) {
+  if (!dir) return [];
   try {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     const results = await Promise.all(
@@ -293,19 +471,19 @@ async function getAllVaultFiles(dir = VAULT_DIR, base = VAULT_DIR) {
     );
     return results.flat();
   } catch (err) {
-    console.error('Error al escanear directorio del vault:', err);
     return [];
   }
 }
 
 // Obtener solo notas markdown para análisis sintáctico
-async function getAllMdFiles() {
-  const all = await getAllVaultFiles();
+async function getAllMdFiles(dir) {
+  const all = await getAllVaultFiles(dir);
   return all.filter(f => f.type === 'note');
 }
 
 // Escanear todas las subcarpetas existentes recursivamente
-async function getAllFolders(dir = VAULT_DIR, base = VAULT_DIR) {
+async function getAllFolders(dir, base = dir) {
+  if (!dir) return [];
   try {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     const results = await Promise.all(
@@ -326,86 +504,266 @@ async function getAllFolders(dir = VAULT_DIR, base = VAULT_DIR) {
   }
 }
 
-// Resolver ruta segura dentro de la bóveda
-function resolveVaultPath(relativePath) {
-  const safeRelative = path.normalize(relativePath).replace(/^(\.\.[\/\\])+/, '');
-  const fullPath = path.join(VAULT_DIR, safeRelative);
-  if (!fullPath.startsWith(VAULT_DIR)) {
-    throw new Error('Acceso no autorizado fuera de la bóveda');
-  }
-  return fullPath;
-}
-
 // ==========================================
 // RUTAS API
 // ==========================================
 
-// 0. Obtener información y estado de cifrado de la bóveda activa
-app.get('/api/vault', (req, res) => {
-  const currentVault = path.basename(VAULT_DIR);
-  const meta = config.vaultsMeta?.[currentVault];
-  const isEncrypted = !!meta?.encrypted;
-  const isLocked = isEncrypted && !activeVaultKey;
+// --- RUTAS DE AUTENTICACIÓN ---
 
+// Estado de autenticación
+app.get('/api/auth/status', (req, res) => {
+  const totalUsers = getUserCount();
   res.json({
-    name: currentVault,
-    path: VAULT_DIR,
-    encrypted: isEncrypted,
-    locked: isLocked
+    hasUsers: totalUsers > 0,
+    loggedIn: !!req.user,
+    user: req.user || null
   });
 });
 
-// Desbloquear bóveda cifrada mediante contraseña
-app.post('/api/vault/unlock', (req, res) => {
+// Registro de usuario
+app.post('/api/auth/register', (req, res) => {
+  try {
+    const { nombres, apellido_paterno, apellido_materno, email, username, password, confirm_password } = req.body;
+
+    if (!password || !confirm_password) {
+      return res.status(400).json({ error: 'La contraseña y su confirmación son obligatorias.' });
+    }
+
+    if (password !== confirm_password) {
+      return res.status(400).json({ error: 'Las contraseñas no coinciden. Por favor verifícalas.' });
+    }
+
+    const { user, token, expires_at } = registerUser({
+      nombres,
+      apellido_paterno,
+      apellido_materno,
+      email,
+      username,
+      password
+    });
+
+    res.setHeader('Set-Cookie', `kortexa_token=${token}; Path=/; SameSite=Lax; Max-Age=${7 * 24 * 60 * 60}`);
+
+    res.json({
+      success: true,
+      message: 'Usuario registrado exitosamente',
+      user,
+      token,
+      expires_at
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Inicio de sesión
+app.post('/api/auth/login', (req, res) => {
+  try {
+    const { usernameOrEmail, password } = req.body;
+    const { user, token, expires_at } = loginUser({ usernameOrEmail, password });
+
+    res.setHeader('Set-Cookie', `kortexa_token=${token}; Path=/; SameSite=Lax; Max-Age=${7 * 24 * 60 * 60}`);
+
+    res.json({
+      success: true,
+      message: 'Inicio de sesión exitoso',
+      user,
+      token,
+      expires_at
+    });
+  } catch (err) {
+    res.status(401).json({ error: err.message });
+  }
+});
+
+// Cierre de sesión
+app.post('/api/auth/logout', (req, res) => {
+  if (req.authToken) {
+    deleteSession(req.authToken);
+  }
+  res.setHeader('Set-Cookie', 'kortexa_token=; Path=/; SameSite=Lax; Max-Age=0');
+  res.json({ success: true, message: 'Sesión finalizada correctamente' });
+});
+
+// Perfil de usuario autenticado
+app.get('/api/auth/me', requireAuth, (req, res) => {
+  res.json({
+    success: true,
+    user: req.user
+  });
+});
+
+// Cambio de contraseña de usuario
+app.post('/api/auth/change-password', requireAuth, (req, res) => {
+  try {
+    const { currentPassword, newPassword, confirmNewPassword } = req.body;
+
+    if (!currentPassword) {
+      return res.status(400).json({ error: 'Debes ingresar tu contraseña actual.' });
+    }
+
+    if (!newPassword || String(newPassword).length < 8) {
+      return res.status(400).json({ error: 'La nueva contraseña debe tener al menos 8 caracteres.' });
+    }
+
+    if (newPassword !== confirmNewPassword) {
+      return res.status(400).json({ error: 'La confirmación de la nueva contraseña no coincide.' });
+    }
+
+    changeUserPassword(req.user.id, currentPassword, newPassword);
+
+    res.json({
+      success: true,
+      message: '¡Tu contraseña ha sido actualizada con éxito!'
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// RUTAS DE INTEGRACIÓN MCP (MODEL CONTEXT PROTOCOL)
+// ==========================================
+
+// Obtener estado y configuración MCP del usuario
+app.get('/api/user/mcp-settings', requireAuth, (req, res) => {
+  try {
+    const settings = getUserMcpSettings(req.user.id);
+    const mcpScriptPath = path.join(__dirname, 'mcp-server.js');
+    const apiUrl = `${req.protocol}://${req.get('host')}/api`;
+
+    const configSnippet = {
+      mcpServers: {
+        kortexa: {
+          command: "node",
+          args: [mcpScriptPath],
+          env: {
+            VAULT_API_URL: apiUrl,
+            VAULT_AUTH_TOKEN: settings.mcp_token
+          }
+        }
+      }
+    };
+
+    res.json({
+      success: true,
+      mcp_enabled: settings.mcp_enabled,
+      mcp_token: settings.mcp_token,
+      api_url: apiUrl,
+      mcp_script_path: mcpScriptPath,
+      config_snippet: configSnippet
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Habilitar o deshabilitar servidor MCP
+app.post('/api/user/mcp-toggle', requireAuth, (req, res) => {
+  try {
+    const { enabled } = req.body;
+    const isEnabled = Boolean(enabled);
+    const result = setUserMcpEnabled(req.user.id, isEnabled);
+
+    res.json({
+      success: true,
+      mcp_enabled: result.mcp_enabled,
+      message: result.mcp_enabled
+        ? 'El servidor MCP ha sido habilitado para tu cuenta.'
+        : 'El servidor MCP ha sido deshabilitado.'
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Regenerar token MCP de acceso
+app.post('/api/user/mcp-regenerate-token', requireAuth, (req, res) => {
+  try {
+    const result = regenerateUserMcpToken(req.user.id);
+    res.json({
+      success: true,
+      mcp_token: result.mcp_token,
+      message: 'Token de acceso MCP regenerado exitosamente.'
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- RUTAS DE BÓVEDAS (AISLADAS POR USUARIO) ---
+
+// 0. Obtener información y estado de cifrado de la bóveda activa del usuario
+app.get('/api/vault', requireAuth, async (req, res) => {
+  try {
+    const activeVault = await ensureUserVault(req.user);
+    const isEncrypted = !!activeVault.encrypted;
+    const activeKey = getActiveVaultKey(req.user.id, activeVault.name);
+    const isLocked = isEncrypted && !activeKey;
+    const vaultDir = getUserVaultDir(req.user, activeVault.name);
+
+    res.json({
+      name: activeVault.name,
+      path: vaultDir,
+      encrypted: isEncrypted,
+      locked: isLocked
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al obtener bóveda activa', details: err.message });
+  }
+});
+
+// Desbloquear bóveda cifrada mediante contraseña para el usuario
+app.post('/api/vault/unlock', requireAuth, async (req, res) => {
   try {
     const { password } = req.body;
-    const currentVault = path.basename(VAULT_DIR);
-    const meta = config.vaultsMeta?.[currentVault];
+    const activeVault = await ensureUserVault(req.user);
 
-    if (!meta?.encrypted) {
-      return res.json({ success: true, message: 'La bóveda no está cifrada', locked: false, name: currentVault });
+    if (!activeVault.encrypted) {
+      return res.json({ success: true, message: 'La bóveda no está cifrada', locked: false, name: activeVault.name });
     }
 
     if (!password) {
       return res.status(400).json({ error: 'La contraseña es requerida' });
     }
 
-    const salt = Buffer.from(meta.salt, 'hex');
+    const salt = Buffer.from(activeVault.salt, 'hex');
     const derivedKey = deriveKey(password, salt);
     const actualHash = createVerificationHash(derivedKey);
 
-    if (!crypto.timingSafeEqual(Buffer.from(actualHash, 'hex'), Buffer.from(meta.verificationHash, 'hex'))) {
+    if (!crypto.timingSafeEqual(Buffer.from(actualHash, 'hex'), Buffer.from(activeVault.verification_hash, 'hex'))) {
       return res.status(401).json({ error: 'Contraseña incorrecta' });
     }
 
-    activeVaultKey = derivedKey;
-    activeVaultSalt = salt;
+    setActiveVaultKey(req.user.id, activeVault.name, derivedKey, salt);
 
-    res.json({ success: true, message: 'Bóveda desbloqueada con éxito', locked: false, name: currentVault });
+    res.json({ success: true, message: 'Bóveda desbloqueada con éxito', locked: false, name: activeVault.name });
   } catch (err) {
     res.status(500).json({ error: 'Error al desbloquear bóveda', details: err.message });
   }
 });
 
-// Bloquear bóveda activa (eliminar clave en memoria)
-app.post('/api/vault/lock', (req, res) => {
-  activeVaultKey = null;
-  activeVaultSalt = null;
-  const currentVault = path.basename(VAULT_DIR);
-  res.json({ success: true, message: 'Bóveda bloqueada', locked: true, name: currentVault });
+// Bloquear bóveda activa (eliminar clave en memoria del usuario)
+app.post('/api/vault/lock', requireAuth, async (req, res) => {
+  try {
+    const activeVault = await ensureUserVault(req.user);
+    clearActiveVaultKey(req.user.id, activeVault.name);
+    res.json({ success: true, message: 'Bóveda bloqueada', locked: true, name: activeVault.name });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al bloquear bóveda', details: err.message });
+  }
 });
 
 // Cifrar físicamente la bóveda activa con AES-256-GCM
-app.post('/api/vault/encrypt', async (req, res) => {
+app.post('/api/vault/encrypt', requireAuth, async (req, res) => {
   try {
     const { password } = req.body;
     if (!password || password.length < 4) {
       return res.status(400).json({ error: 'La contraseña debe tener al menos 4 caracteres' });
     }
 
-    const currentVault = path.basename(VAULT_DIR);
-    const meta = config.vaultsMeta?.[currentVault];
-    if (meta?.encrypted) {
+    const activeVault = await ensureUserVault(req.user);
+    if (activeVault.encrypted) {
       return res.status(400).json({ error: 'La bóveda ya se encuentra cifrada' });
     }
 
@@ -413,23 +771,15 @@ app.post('/api/vault/encrypt', async (req, res) => {
     const derivedKey = deriveKey(password, salt);
     const verificationHash = createVerificationHash(derivedKey);
 
-    // Cifrar físicamente todos los archivos en disco
-    await encryptDirectory(VAULT_DIR, derivedKey, salt);
+    const vaultDir = getUserVaultDir(req.user, activeVault.name);
+    await encryptDirectory(vaultDir, derivedKey, salt);
 
-    if (!config.vaultsMeta) config.vaultsMeta = {};
-    config.vaultsMeta[currentVault] = {
-      encrypted: true,
-      salt: salt.toString('hex'),
-      verificationHash
-    };
-    saveConfig(config);
-
-    activeVaultKey = derivedKey;
-    activeVaultSalt = salt;
+    updateUserVaultEncryption(req.user.id, activeVault.name, true, salt.toString('hex'), verificationHash);
+    setActiveVaultKey(req.user.id, activeVault.name, derivedKey, salt);
 
     res.json({
       success: true,
-      message: `Bóveda "${currentVault}" cifrada con AES-256-GCM`,
+      message: `Bóveda "${activeVault.name}" cifrada con AES-256-GCM`,
       encrypted: true,
       locked: false
     });
@@ -439,13 +789,12 @@ app.post('/api/vault/encrypt', async (req, res) => {
 });
 
 // Descifrar físicamente la bóveda activa a texto plano
-app.post('/api/vault/decrypt', async (req, res) => {
+app.post('/api/vault/decrypt', requireAuth, async (req, res) => {
   try {
     const { password } = req.body;
-    const currentVault = path.basename(VAULT_DIR);
-    const meta = config.vaultsMeta?.[currentVault];
+    const activeVault = await ensureUserVault(req.user);
 
-    if (!meta?.encrypted) {
+    if (!activeVault.encrypted) {
       return res.status(400).json({ error: 'La bóveda no está cifrada' });
     }
 
@@ -453,26 +802,23 @@ app.post('/api/vault/decrypt', async (req, res) => {
       return res.status(400).json({ error: 'Se requiere la contraseña para descifrar' });
     }
 
-    const salt = Buffer.from(meta.salt, 'hex');
+    const salt = Buffer.from(activeVault.salt, 'hex');
     const derivedKey = deriveKey(password, salt);
     const actualHash = createVerificationHash(derivedKey);
 
-    if (!crypto.timingSafeEqual(Buffer.from(actualHash, 'hex'), Buffer.from(meta.verificationHash, 'hex'))) {
+    if (!crypto.timingSafeEqual(Buffer.from(actualHash, 'hex'), Buffer.from(activeVault.verification_hash, 'hex'))) {
       return res.status(401).json({ error: 'Contraseña incorrecta' });
     }
 
-    // Descifrar físicamente todos los archivos en disco a texto plano
-    await decryptDirectory(VAULT_DIR, derivedKey);
+    const vaultDir = getUserVaultDir(req.user, activeVault.name);
+    await decryptDirectory(vaultDir, derivedKey);
 
-    delete config.vaultsMeta[currentVault];
-    saveConfig(config);
-
-    activeVaultKey = null;
-    activeVaultSalt = null;
+    updateUserVaultEncryption(req.user.id, activeVault.name, false, null, null);
+    clearActiveVaultKey(req.user.id, activeVault.name);
 
     res.json({
       success: true,
-      message: `Bóveda "${currentVault}" descifrada a texto plano`,
+      message: `Bóveda "${activeVault.name}" descifrada a texto plano`,
       encrypted: false,
       locked: false
     });
@@ -481,46 +827,40 @@ app.post('/api/vault/decrypt', async (req, res) => {
   }
 });
 
-// Listar todas las bóvedas disponibles
-app.get('/api/vaults', async (req, res) => {
+// Listar todas las bóvedas del usuario autenticado
+app.get('/api/vaults', requireAuth, async (req, res) => {
   try {
-    if (!Array.isArray(config.vaults)) {
-      config.vaults = [path.basename(VAULT_DIR)];
-    }
-    const parentDir = path.dirname(VAULT_DIR);
+    await ensureUserVault(req.user);
+    const userVaults = getUserVaults(req.user.id);
     const result = [];
 
-    for (const vName of config.vaults) {
-      const vPath = path.isAbsolute(vName) ? vName : path.join(parentDir, vName);
+    for (const v of userVaults) {
+      const vPath = getUserVaultDir(req.user, v.name);
+      let fileCount = 0;
       try {
-        const stat = await fs.stat(vPath);
-        if (stat.isDirectory()) {
-          let fileCount = 0;
-          try {
-            const files = await fs.readdir(vPath);
-            fileCount = files.length;
-          } catch {}
-          const vMeta = config.vaultsMeta?.[vName];
-          const isCurrent = path.resolve(vPath).toLowerCase() === path.resolve(VAULT_DIR).toLowerCase();
-          result.push({
-            name: path.basename(vPath),
-            path: vPath,
-            filesCount: fileCount,
-            isActive: isCurrent,
-            isEncrypted: !!vMeta?.encrypted,
-            isLocked: !!vMeta?.encrypted && (!isCurrent || !activeVaultKey)
-          });
-        }
+        const files = await fs.readdir(vPath);
+        fileCount = files.length;
       } catch {}
+
+      const isCurrent = !!v.is_active;
+      const activeKey = getActiveVaultKey(req.user.id, v.name);
+      result.push({
+        name: v.name,
+        path: vPath,
+        filesCount: fileCount,
+        isActive: isCurrent,
+        isEncrypted: !!v.encrypted,
+        isLocked: !!v.encrypted && (!isCurrent || !activeKey)
+      });
     }
 
-    const currentVault = path.basename(VAULT_DIR);
-    const currentMeta = config.vaultsMeta?.[currentVault];
+    const active = userVaults.find(v => v.is_active) || userVaults[0];
+    const activeKey = active ? getActiveVaultKey(req.user.id, active.name) : null;
 
     res.json({
-      active: currentVault,
-      encrypted: !!currentMeta?.encrypted,
-      locked: !!currentMeta?.encrypted && !activeVaultKey,
+      active: active ? active.name : '',
+      encrypted: !!active?.encrypted,
+      locked: !!active?.encrypted && !activeKey,
       vaults: result
     });
   } catch (err) {
@@ -528,8 +868,8 @@ app.get('/api/vaults', async (req, res) => {
   }
 });
 
-// Crear una nueva bóveda
-app.post('/api/vaults', async (req, res) => {
+// Crear una nueva bóveda para el usuario autenticado
+app.post('/api/vaults', requireAuth, async (req, res) => {
   try {
     const { name, switchNow = true } = req.body;
     if (!name || typeof name !== 'string') {
@@ -540,10 +880,8 @@ app.post('/api/vaults', async (req, res) => {
       return res.status(400).json({ error: 'El nombre contiene caracteres inválidos' });
     }
 
-    const parentDir = path.dirname(VAULT_DIR);
-    const newVaultDir = path.join(parentDir, cleanName);
+    const newVaultDir = getUserVaultDir(req.user, cleanName);
 
-    // Crear directorio si no existe
     let isNew = false;
     try {
       await fs.access(newVaultDir);
@@ -552,231 +890,121 @@ app.post('/api/vaults', async (req, res) => {
       isNew = true;
     }
 
-    // Si es nueva, crear una nota inicial de bienvenida
     if (isNew) {
-      const welcomeContent = `# Bóveda: ${cleanName}\n\n¡Bienvenido a tu nueva bóveda **${cleanName}**!\n\n- Comienza creando notas nuevas con el botón **+** en la barra lateral.\n- Conecta ideas utilizando enlaces de doble corchete como [[Ideas]].\n- Arrastra imágenes, documentos o archivos de audio directamente a la aplicación.\n`;
+      const welcomeContent = `# Bóveda: ${cleanName}\n\n¡Bienvenido a tu nueva bóveda **${cleanName}**!\n\n- Comienza creando notas nuevas con el botón **+** en la barra lateral.\n- Conecta ideas utilizando enlaces de doble corchete como [[Ideas]].\n`;
       await fs.writeFile(path.join(newVaultDir, 'Bienvenida.md'), welcomeContent, 'utf-8');
     }
 
-    if (!Array.isArray(config.vaults)) {
-      config.vaults = [path.basename(VAULT_DIR)];
-    }
-    if (!config.vaults.includes(cleanName)) {
-      config.vaults.push(cleanName);
-    }
+    addUserVault(req.user.id, cleanName, switchNow);
 
-    if (switchNow) {
-      VAULT_DIR = newVaultDir;
-      config.vaultDir = cleanName;
-      config.vaultName = cleanName;
-    }
-    saveConfig(config);
-
+    const allUserVaults = getUserVaults(req.user.id);
     res.json({
       success: true,
       name: cleanName,
       path: newVaultDir,
       switched: switchNow,
-      active: path.basename(VAULT_DIR),
-      vaults: config.vaults
+      active: switchNow ? cleanName : (allUserVaults.find(v => v.is_active)?.name || cleanName),
+      vaults: allUserVaults.map(v => v.name)
     });
   } catch (err) {
     res.status(500).json({ error: 'Error al crear la bóveda', details: err.message });
   }
 });
 
-// Eliminar una bóveda y sus archivos
-app.delete('/api/vaults', async (req, res) => {
+// Eliminar una bóveda y sus archivos del usuario autenticado
+app.delete('/api/vaults', requireAuth, async (req, res) => {
   try {
     const name = req.query.name || req.body.name;
     if (!name || typeof name !== 'string') {
       return res.status(400).json({ error: 'El nombre de la bóveda es requerido' });
     }
-
     const cleanName = name.replace(/[<>:"/\\|?*]/g, '').trim();
-    if (!cleanName) {
-      return res.status(400).json({ error: 'Nombre de bóveda inválido' });
-    }
+    const targetDir = getUserVaultDir(req.user, cleanName);
 
-    const parentDir = path.dirname(VAULT_DIR);
-    const targetDir = path.join(parentDir, cleanName);
-
-    // Evitar eliminación de directorios raíz del sistema
-    if (path.resolve(targetDir) === path.resolve(parentDir) || path.resolve(targetDir) === path.resolve(__dirname)) {
-      return res.status(400).json({ error: 'No se puede eliminar este directorio del sistema' });
-    }
-
-    // Eliminar físicamente los archivos del directorio en disco
     try {
-      await fs.access(targetDir);
       await fs.rm(targetDir, { recursive: true, force: true });
-    } catch (err) {
-      // Si la carpeta no existía físicamente, continuamos para depurar la configuración
-    }
+    } catch {}
 
-    // Remover de la lista de bóvedas
-    if (Array.isArray(config.vaults)) {
-      config.vaults = config.vaults.filter(v => v !== cleanName);
-    }
-    // Remover metadatos de cifrado si existían
-    if (config.vaultsMeta?.[cleanName]) {
-      delete config.vaultsMeta[cleanName];
-    }
+    clearActiveVaultKey(req.user.id, cleanName);
+    removeUserVault(req.user.id, cleanName);
 
-    const wasActive = path.resolve(targetDir).toLowerCase() === path.resolve(VAULT_DIR).toLowerCase();
-
-    // Si la bóveda eliminada era la activa, alternar a otra disponible o reiniciar una por defecto
-    if (wasActive) {
-      activeVaultKey = null;
-      activeVaultSalt = null;
-
-      if (config.vaults && config.vaults.length > 0) {
-        const nextVault = config.vaults[0];
-        VAULT_DIR = path.join(parentDir, nextVault);
-        config.vaultDir = nextVault;
-        config.vaultName = nextVault;
-      } else {
-        const defaultVault = 'vault';
-        VAULT_DIR = path.join(parentDir, defaultVault);
-        await fs.mkdir(VAULT_DIR, { recursive: true });
-        config.vaultDir = defaultVault;
-        config.vaultName = defaultVault;
-        config.vaults = [defaultVault];
-      }
-      tryAutoUnlock();
-    }
-
-    saveConfig(config);
+    const remaining = getUserVaults(req.user.id);
+    const active = remaining.find(v => v.is_active) || remaining[0];
 
     res.json({
       success: true,
       message: `Bóveda "${cleanName}" eliminada con éxito`,
-      wasActive,
-      active: path.basename(VAULT_DIR),
-      vaults: config.vaults
+      active: active ? active.name : '',
+      vaults: remaining.map(v => v.name)
     });
   } catch (err) {
     res.status(500).json({ error: 'Error al eliminar la bóveda', details: err.message });
   }
 });
 
-// Cambiar la bóveda activa
-app.post('/api/vault/switch', async (req, res) => {
+// Cambiar la bóveda activa del usuario
+app.post('/api/vault/switch', requireAuth, async (req, res) => {
   try {
     const { name } = req.body;
     if (!name || typeof name !== 'string') {
       return res.status(400).json({ error: 'El nombre de la bóveda es requerido' });
     }
     const cleanName = name.replace(/[<>:"/\\|?*]/g, '').trim();
-    const parentDir = path.dirname(VAULT_DIR);
-    const targetDir = path.join(parentDir, cleanName);
 
-    try {
-      const stat = await fs.stat(targetDir);
-      if (!stat.isDirectory()) {
-        return res.status(400).json({ error: 'La ruta especificada no es un directorio' });
-      }
-    } catch {
-      return res.status(404).json({ error: `La bóveda "${cleanName}" no existe en el disco` });
+    const userVaults = getUserVaults(req.user.id);
+    const targetVault = userVaults.find(v => v.name.toLowerCase() === cleanName.toLowerCase());
+    if (!targetVault) {
+      return res.status(404).json({ error: `La bóveda "${cleanName}" no existe en tu cuenta` });
     }
 
-    VAULT_DIR = targetDir;
-    config.vaultDir = cleanName;
-    config.vaultName = cleanName;
-    if (!Array.isArray(config.vaults)) {
-      config.vaults = [];
-    }
-    if (!config.vaults.includes(cleanName)) {
-      config.vaults.push(cleanName);
-    }
-    saveConfig(config);
-
-    activeVaultKey = null;
-    activeVaultSalt = null;
-    tryAutoUnlock();
-
-    const targetMeta = config.vaultsMeta?.[cleanName];
-    const isEncrypted = !!targetMeta?.encrypted;
-    const isLocked = isEncrypted && !activeVaultKey;
+    setUserActiveVault(req.user.id, targetVault.name);
+    const targetDir = getUserVaultDir(req.user, targetVault.name);
+    const activeKey = getActiveVaultKey(req.user.id, targetVault.name);
 
     res.json({
       success: true,
-      name: cleanName,
-      path: VAULT_DIR,
-      encrypted: isEncrypted,
-      locked: isLocked
+      name: targetVault.name,
+      path: targetDir,
+      encrypted: !!targetVault.encrypted,
+      locked: !!targetVault.encrypted && !activeKey
     });
   } catch (err) {
     res.status(500).json({ error: 'Error al cambiar de bóveda', details: err.message });
   }
 });
 
-// Renombrar la bóveda activa
-app.post('/api/vault/rename', async (req, res) => {
+// Renombrar una bóveda del usuario
+app.post('/api/vault/rename', requireAuth, async (req, res) => {
   try {
-    const { newName } = req.body;
-    if (!newName || typeof newName !== 'string') {
-      return res.status(400).json({ error: 'El nombre de la bóveda es requerido' });
+    const { oldName, newName } = req.body;
+    if (!oldName || !newName) {
+      return res.status(400).json({ error: 'Se requiere nombre actual y nuevo nombre' });
     }
-    const cleanName = newName.replace(/[<>:"/\\|?*]/g, '').trim();
-    if (!cleanName) {
-      return res.status(400).json({ error: 'El nombre contiene caracteres inválidos' });
-    }
+    const cleanOld = oldName.replace(/[<>:"/\\|?*]/g, '').trim();
+    const cleanNew = newName.replace(/[<>:"/\\|?*]/g, '').trim();
 
-    const oldVaultDir = VAULT_DIR;
-    const oldName = path.basename(oldVaultDir);
-    const parentDir = path.dirname(oldVaultDir);
-    const newVaultDir = path.join(parentDir, cleanName);
+    const oldDir = getUserVaultDir(req.user, cleanOld);
+    const newDir = getUserVaultDir(req.user, cleanNew);
 
-    // Si el nombre no cambió en absoluto
-    if (oldName === cleanName) {
-      return res.json({ success: true, name: cleanName, path: VAULT_DIR });
-    }
+    await fs.rename(oldDir, newDir);
+    renameUserVault(req.user.id, cleanOld, cleanNew);
 
-    // Verificar si el destino ya existe (diferenciando colisión con otra carpeta)
-    if (path.resolve(oldVaultDir).toLowerCase() !== path.resolve(newVaultDir).toLowerCase()) {
-      try {
-        await fs.access(newVaultDir);
-        return res.status(400).json({ error: `Ya existe una carpeta o bóveda llamada "${cleanName}"` });
-      } catch (err) {
-        // No existe, proceed
-      }
-
-      await fs.rename(oldVaultDir, newVaultDir);
-    } else {
-      // Cambio únicamente de mayúsculas/minúsculas en sistemas de archivos case-insensitive (como Windows)
-      const tempVaultDir = path.join(parentDir, `__temp_vault_${Date.now()}`);
-      await fs.rename(oldVaultDir, tempVaultDir);
-      await fs.rename(tempVaultDir, newVaultDir);
+    const keyData = getActiveVaultKey(req.user.id, cleanOld);
+    if (keyData) {
+      setActiveVaultKey(req.user.id, cleanNew, keyData.key, keyData.salt);
+      clearActiveVaultKey(req.user.id, cleanOld);
     }
 
-    VAULT_DIR = newVaultDir;
-    config.vaultDir = cleanName;
-    config.vaultName = cleanName;
-    if (Array.isArray(config.vaults)) {
-      const idx = config.vaults.indexOf(oldName);
-      if (idx !== -1) {
-        config.vaults[idx] = cleanName;
-      } else if (!config.vaults.includes(cleanName)) {
-        config.vaults.push(cleanName);
-      }
-    }
-    if (config.vaultsMeta?.[oldName]) {
-      config.vaultsMeta[cleanName] = config.vaultsMeta[oldName];
-      delete config.vaultsMeta[oldName];
-    }
-    saveConfig(config);
-
-    res.json({ success: true, name: cleanName, path: VAULT_DIR });
+    res.json({ success: true, name: cleanNew, path: newDir });
   } catch (err) {
     res.status(500).json({ error: 'Error al renombrar bóveda', details: err.message });
   }
 });
 
-// 1. Obtener todos los archivos de la bóveda (notas y multimedia)
-app.get('/api/notes', checkVaultLock, async (req, res) => {
+// 1. Obtener todos los archivos de la bóveda activa del usuario (notas y multimedia)
+app.get('/api/notes', requireAuth, checkVaultLock, async (req, res) => {
   try {
-    const files = await getAllVaultFiles();
+    const files = await getAllVaultFiles(req.userVaultDir);
     files.sort((a, b) => b.mtime - a.mtime);
     res.json(files);
   } catch (err) {
@@ -784,10 +1012,10 @@ app.get('/api/notes', checkVaultLock, async (req, res) => {
   }
 });
 
-// 2. Obtener lista de todas las subcarpetas existentes
-app.get('/api/folders', checkVaultLock, async (req, res) => {
+// 2. Obtener lista de todas las subcarpetas existentes en la bóveda del usuario
+app.get('/api/folders', requireAuth, checkVaultLock, async (req, res) => {
   try {
-    const folders = await getAllFolders();
+    const folders = await getAllFolders(req.userVaultDir);
     folders.sort();
     res.json(folders);
   } catch (err) {
@@ -795,17 +1023,16 @@ app.get('/api/folders', checkVaultLock, async (req, res) => {
   }
 });
 
-// 3. Crear una nueva subcarpeta
-app.post('/api/folders', checkVaultLock, async (req, res) => {
+// 3. Crear una nueva subcarpeta en la bóveda del usuario
+app.post('/api/folders', requireAuth, checkVaultLock, async (req, res) => {
   try {
     let { folder } = req.body;
     if (!folder) {
       return res.status(400).json({ error: 'El nombre de la carpeta es requerido' });
     }
 
-    // Normalizar y sanitizar ruta
     const cleanFolder = folder.replace(/[<>:"|?*]/g, '').trim();
-    const fullPath = resolveVaultPath(cleanFolder);
+    const fullPath = resolveUserVaultPath(req.user, req.userVault.name, cleanFolder);
 
     await fs.mkdir(fullPath, { recursive: true });
     res.json({ success: true, folder: cleanFolder.replace(/\\/g, '/') });
@@ -814,15 +1041,15 @@ app.post('/api/folders', checkVaultLock, async (req, res) => {
   }
 });
 
-// 4. Eliminar una subcarpeta
-app.delete('/api/folders', checkVaultLock, async (req, res) => {
+// 4. Eliminar una subcarpeta en la bóveda del usuario
+app.delete('/api/folders', requireAuth, checkVaultLock, async (req, res) => {
   try {
     const folder = req.query.folder || req.body.folder;
     if (!folder) {
       return res.status(400).json({ error: 'La ruta de la carpeta es requerida' });
     }
 
-    const fullPath = resolveVaultPath(folder);
+    const fullPath = resolveUserVaultPath(req.user, req.userVault.name, folder);
     await fs.rm(fullPath, { recursive: true, force: true });
     res.json({ success: true, message: `Carpeta ${folder} eliminada.` });
   } catch (err) {
@@ -830,15 +1057,15 @@ app.delete('/api/folders', checkVaultLock, async (req, res) => {
   }
 });
 
-// 5. Servir archivo estático/multimedia de la bóveda de forma segura
-app.get('/api/vault-raw/:path(*)', checkVaultLock, async (req, res) => {
+// 5. Servir archivo estático/multimedia de la bóveda del usuario de forma segura
+app.get('/api/vault-raw/:path(*)', requireAuth, checkVaultLock, async (req, res) => {
   try {
     const rawPath = req.params.path;
-    const fullPath = resolveVaultPath(rawPath);
+    const fullPath = resolveUserVaultPath(req.user, req.userVault.name, rawPath);
     await fs.access(fullPath);
-    const buf = await readVaultFileBuffer(fullPath);
+    const buf = await readVaultFileBuffer(fullPath, req.userVaultKey);
     const ext = path.extname(fullPath).toLowerCase();
-    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
     res.type(ext);
     res.send(buf);
   } catch (err) {
@@ -852,8 +1079,8 @@ app.get('/api/vault-raw/:path(*)', checkVaultLock, async (req, res) => {
   }
 });
 
-// 6. Subir archivo multimedia o documento a la bóveda
-app.post('/api/upload', checkVaultLock, async (req, res) => {
+// 6. Subir archivo multimedia o documento a la bóveda del usuario
+app.post('/api/upload', requireAuth, checkVaultLock, async (req, res) => {
   try {
     const { filename, folder, base64 } = req.body;
     if (!filename || !base64) {
@@ -863,14 +1090,12 @@ app.post('/api/upload', checkVaultLock, async (req, res) => {
     const cleanFolder = (folder || '').replace(/\\/g, '/').replace(/[<>:"|?*]/g, '').trim();
     const cleanName = path.basename(filename).replace(/[<>:"/\\|?*]/g, '').trim();
     const relativePath = cleanFolder ? `${cleanFolder}/${cleanName}` : cleanName;
-    const fullPath = resolveVaultPath(relativePath);
+    const fullPath = resolveUserVaultPath(req.user, req.userVault.name, relativePath);
 
-    // Asegurar directorio padre
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
 
-    // Guardar buffer binario (con cifrado si la bóveda está protegida)
     const buffer = Buffer.from(base64, 'base64');
-    await writeVaultFile(fullPath, buffer);
+    await writeVaultFile(fullPath, buffer, req.userVault.encrypted, req.userVaultKey);
 
     const ext = path.extname(cleanName).toLowerCase();
     const type = getFileType(ext);
@@ -890,13 +1115,13 @@ app.post('/api/upload', checkVaultLock, async (req, res) => {
 });
 
 // 7. Obtener contenido o metadatos de un archivo (nota o multimedia)
-app.get('/api/note', checkVaultLock, async (req, res) => {
+app.get('/api/note', requireAuth, checkVaultLock, async (req, res) => {
   try {
     let notePath = req.query.path;
     const title = req.query.title;
 
     if (!notePath && title) {
-      const allFiles = await getAllVaultFiles();
+      const allFiles = await getAllVaultFiles(req.userVaultDir);
       const cleanTitle = title.toLowerCase();
       const found = allFiles.find(n => 
         n.title.toLowerCase() === cleanTitle || 
@@ -916,7 +1141,7 @@ app.get('/api/note', checkVaultLock, async (req, res) => {
 
     if (!path.extname(notePath)) notePath += '.md';
 
-    const fullPath = resolveVaultPath(notePath);
+    const fullPath = resolveUserVaultPath(req.user, req.userVault.name, notePath);
     const ext = path.extname(notePath).toLowerCase();
     const type = getFileType(ext);
     const folderRelative = path.dirname(notePath).replace(/\\/g, '/');
@@ -936,7 +1161,7 @@ app.get('/api/note', checkVaultLock, async (req, res) => {
       });
     }
 
-    const content = await readVaultFileText(fullPath);
+    const content = await readVaultFileText(fullPath, req.userVaultKey);
 
     res.json({
       filename: notePath.replace(/\\/g, '/'),
@@ -958,17 +1183,17 @@ app.get('/api/note', checkVaultLock, async (req, res) => {
 });
 
 // Ruta comodín para compatibilidad retroactiva: /api/notes/:path(*)
-app.get('/api/notes/:path(*)', checkVaultLock, async (req, res) => {
+app.get('/api/notes/:path(*)', requireAuth, checkVaultLock, async (req, res) => {
   try {
     let notePath = req.params.path;
     if (!path.extname(notePath)) notePath += '.md';
 
     let fullPath;
     try {
-      fullPath = resolveVaultPath(notePath);
+      fullPath = resolveUserVaultPath(req.user, req.userVault.name, notePath);
       await fs.access(fullPath);
     } catch {
-      const allFiles = await getAllVaultFiles();
+      const allFiles = await getAllVaultFiles(req.userVaultDir);
       const cleanTitle = path.basename(notePath, path.extname(notePath)).toLowerCase();
       const found = allFiles.find(n => n.title.toLowerCase() === cleanTitle || n.name.toLowerCase() === cleanTitle);
       if (found) {
@@ -998,7 +1223,7 @@ app.get('/api/notes/:path(*)', checkVaultLock, async (req, res) => {
       });
     }
 
-    const content = await readVaultFileText(fullPath);
+    const content = await readVaultFileText(fullPath, req.userVaultKey);
 
     res.json({
       filename: notePath.replace(/\\/g, '/'),
@@ -1019,8 +1244,8 @@ app.get('/api/notes/:path(*)', checkVaultLock, async (req, res) => {
   }
 });
 
-// 6. Crear o actualizar una nota (con soporte para subcarpetas y mover de carpeta)
-app.post('/api/notes', checkVaultLock, async (req, res) => {
+// 6. Crear o actualizar una nota
+app.post('/api/notes', requireAuth, checkVaultLock, async (req, res) => {
   try {
     let { title, folder, content, path: customPath, oldPath } = req.body;
     if (!title && !customPath) {
@@ -1041,23 +1266,17 @@ app.post('/api/notes', checkVaultLock, async (req, res) => {
       relativePath = cleanFolder ? `${cleanFolder}/${safeTitle}.md` : `${safeTitle}.md`;
     }
 
-    const fullPath = resolveVaultPath(relativePath);
+    const fullPath = resolveUserVaultPath(req.user, req.userVault.name, relativePath);
 
-    // Si se renombró o se movió de carpeta, borrar el archivo anterior
     if (oldPath && oldPath !== relativePath) {
       try {
-        const oldFullPath = resolveVaultPath(oldPath);
+        const oldFullPath = resolveUserVaultPath(req.user, req.userVault.name, oldPath);
         await fs.unlink(oldFullPath);
-      } catch (err) {
-        // Ignorar si el anterior no existía
-      }
+      } catch {}
     }
 
-    // Asegurar que la subcarpeta destino exista
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
-
-    // Guardar archivo (cifrado si la bóveda está protegida)
-    await writeVaultFile(fullPath, content ?? '');
+    await writeVaultFile(fullPath, content ?? '', req.userVault.encrypted, req.userVaultKey);
 
     const folderRelative = path.dirname(relativePath).replace(/\\/g, '/');
 
@@ -1074,7 +1293,7 @@ app.post('/api/notes', checkVaultLock, async (req, res) => {
 });
 
 // 8. Eliminar una nota o archivo multimedia
-app.delete(['/api/notes', '/api/notes/:path(*)'], checkVaultLock, async (req, res) => {
+app.delete(['/api/notes', '/api/notes/:path(*)'], requireAuth, checkVaultLock, async (req, res) => {
   try {
     let notePath = req.query.path || req.params.path;
     if (!notePath) {
@@ -1082,7 +1301,7 @@ app.delete(['/api/notes', '/api/notes/:path(*)'], checkVaultLock, async (req, re
     }
     if (!path.extname(notePath)) notePath += '.md';
 
-    const fullPath = resolveVaultPath(notePath);
+    const fullPath = resolveUserVaultPath(req.user, req.userVault.name, notePath);
     await fs.unlink(fullPath);
     res.json({ success: true, message: `Archivo ${notePath} eliminado.` });
   } catch (err) {
@@ -1091,14 +1310,13 @@ app.delete(['/api/notes', '/api/notes/:path(*)'], checkVaultLock, async (req, re
 });
 
 // 9. Datos para el Grafo (Nodos y Enlaces con soporte de subcarpetas y multimedia)
-app.get('/api/graph', checkVaultLock, async (req, res) => {
+app.get('/api/graph', requireAuth, checkVaultLock, async (req, res) => {
   try {
-    const allFiles = await getAllVaultFiles();
+    const allFiles = await getAllVaultFiles(req.userVaultDir);
     const mdFiles = allFiles.filter(f => f.type === 'note');
     const nodesMap = new Map();
     const links = [];
 
-    // Registrar todos los nodos existentes (notas y multimedia)
     for (const file of allFiles) {
       nodesMap.set(file.title, {
         id: file.title,
@@ -1108,29 +1326,25 @@ app.get('/api/graph', checkVaultLock, async (req, res) => {
         type: file.type,
         exists: true
       });
-      // Registrar también por nombre completo con extensión
       if (file.name !== file.title) {
         nodesMap.set(file.name, nodesMap.get(file.title));
       }
     }
 
-    // Extraer enlaces [[Wikilinks]] e incrustaciones ![[Archivo]]
     for (const file of mdFiles) {
       const sourceTitle = file.title;
-      const content = await readVaultFileText(file.fullPath);
+      const content = await readVaultFileText(file.fullPath, req.userVaultKey);
       const matches = [...content.matchAll(WIKI_LINK_REGEX)];
 
       for (const match of matches) {
         let rawTarget = match[1].trim();
         if (!rawTarget) continue;
-        // Soporte para ![[archivo.png|300]]
         if (rawTarget.includes('|')) {
           rawTarget = rawTarget.split('|')[0].trim();
         }
         const targetTitle = rawTarget;
         if (!targetTitle) continue;
 
-        // Si el destino no existe físicamente en ninguna carpeta, marcarlo como nodo pendiente
         if (!nodesMap.has(targetTitle)) {
           nodesMap.set(targetTitle, {
             id: targetTitle,
@@ -1157,17 +1371,17 @@ app.get('/api/graph', checkVaultLock, async (req, res) => {
 });
 
 // 9. Backlinks para una nota específica en cualquier subcarpeta
-app.get('/api/backlinks/:title', checkVaultLock, async (req, res) => {
+app.get('/api/backlinks/:title', requireAuth, checkVaultLock, async (req, res) => {
   try {
     const targetTitle = req.params.title.replace(/\.md$/, '');
-    const mdFiles = await getAllMdFiles();
+    const mdFiles = await getAllMdFiles(req.userVaultDir);
     const backlinks = [];
     const searchTarget = `[[${targetTitle}]]`;
 
     for (const file of mdFiles) {
       if (file.title.toLowerCase() === targetTitle.toLowerCase()) continue;
 
-      const content = await readVaultFileText(file.fullPath);
+      const content = await readVaultFileText(file.fullPath, req.userVaultKey);
       if (content.includes(searchTarget)) {
         backlinks.push({
           title: file.title,
@@ -1184,18 +1398,18 @@ app.get('/api/backlinks/:title', checkVaultLock, async (req, res) => {
 });
 
 // 10. Búsqueda de texto en todas las subcarpetas
-app.get('/api/search', checkVaultLock, async (req, res) => {
+app.get('/api/search', requireAuth, checkVaultLock, async (req, res) => {
   try {
     const query = (req.query.q || '').toLowerCase().trim();
     if (!query) {
       return res.json([]);
     }
 
-    const mdFiles = await getAllMdFiles();
+    const mdFiles = await getAllMdFiles(req.userVaultDir);
     const results = [];
 
     for (const file of mdFiles) {
-      const content = await readVaultFileText(file.fullPath);
+      const content = await readVaultFileText(file.fullPath, req.userVaultKey);
       const titleMatch = file.title.toLowerCase().includes(query);
       const contentMatch = content.toLowerCase().includes(query);
 
@@ -1224,11 +1438,49 @@ app.get('/api/search', checkVaultLock, async (req, res) => {
   }
 });
 
-// Iniciar servidor
-app.listen(PORT, () => {
-  console.log(`\n===========================================`);
-  console.log(`🧠 Servidor Kortexa corriendo en:`);
-  console.log(`👉 http://localhost:${PORT}`);
-  console.log(`📂 Bóveda de notas: ${VAULT_DIR}`);
-  console.log(`===========================================\n`);
-});
+// ==========================================
+// INICIALIZACIÓN DEL SERVIDOR (HTTP / HTTPS)
+// ==========================================
+const CERTS_DIR = path.join(__dirname, 'certs');
+const KEY_PATH = process.env.SSL_KEY_PATH || path.join(CERTS_DIR, 'key.pem');
+const CERT_PATH = process.env.SSL_CERT_PATH || path.join(CERTS_DIR, 'cert.pem');
+
+const hasSslCerts = fsSync.existsSync(KEY_PATH) && fsSync.existsSync(CERT_PATH);
+const useHttps = process.env.DISABLE_HTTPS !== 'true' && hasSslCerts;
+
+if (useHttps) {
+  try {
+    const sslOptions = {
+      key: fsSync.readFileSync(KEY_PATH),
+      cert: fsSync.readFileSync(CERT_PATH)
+    };
+
+    const server = https.createServer(sslOptions, app);
+    server.listen(PORT, () => {
+      console.log(`\n===========================================`);
+      console.log(`🔒 Servidor Kortexa HTTPS (SSL/TLS) activo en:`);
+      console.log(`👉 https://localhost:${PORT}`);
+      console.log(`📂 Raíz de bóvedas de usuarios: ${USER_VAULTS_ROOT}`);
+      console.log(`📜 Certificados: ${KEY_PATH}`);
+      console.log(`===========================================\n`);
+    });
+  } catch (sslErr) {
+    console.error('Error al inicializar HTTPS con certificados:', sslErr.message);
+    console.log('Iniciando en modo HTTP como respaldo...');
+    app.listen(PORT, () => {
+      console.log(`\n===========================================`);
+      console.log(`🧠 Servidor Kortexa HTTP corriendo en:`);
+      console.log(`👉 http://localhost:${PORT}`);
+      console.log(`📂 Raíz de bóvedas de usuarios: ${USER_VAULTS_ROOT}`);
+      console.log(`===========================================\n`);
+    });
+  }
+} else {
+  app.listen(PORT, () => {
+    console.log(`\n===========================================`);
+    console.log(`🧠 Servidor Kortexa HTTP corriendo en:`);
+    console.log(`👉 http://localhost:${PORT}`);
+    console.log(`📂 Raíz de bóvedas de usuarios: ${USER_VAULTS_ROOT}`);
+    console.log(`===========================================\n`);
+  });
+}

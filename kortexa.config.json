@@ -1,9 +1,9 @@
 {
-  "vaultDir": "memong",
+  "vaultDir": "vaults/memo69/memong",
   "vaultName": "memong",
   "vaults": [
-    "memong",
-    "Proyectos"
+    "vaults/memo69/memong",
+    "vaults/memo69/Proyectos"
   ],
   "vaultsMeta": {
     "memong": {

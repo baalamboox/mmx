@@ -2,8 +2,40 @@
 // KORTEXA — APLICACIÓN CLIENTE (CON SOPORTE DE SUBCARPETAS Y ÁRBOL)
 // ==========================================================================
 
+// Interceptor global de fetch para inyectar token de autenticación y manejar 401
+const originalFetch = window.fetch;
+window.fetch = async function(url, options = {}) {
+  options = options || {};
+  options.headers = options.headers || {};
+  const token = localStorage.getItem('kortexa_auth_token');
+  if (token) {
+    if (options.headers instanceof Headers) {
+      if (!options.headers.has('Authorization')) {
+        options.headers.set('Authorization', `Bearer ${token}`);
+      }
+    } else if (Array.isArray(options.headers)) {
+      if (!options.headers.some(([k]) => k.toLowerCase() === 'authorization')) {
+        options.headers.push(['Authorization', `Bearer ${token}`]);
+      }
+    } else {
+      if (!options.headers['Authorization']) {
+        options.headers['Authorization'] = `Bearer ${token}`;
+      }
+    }
+  }
+
+  const res = await originalFetch(url, options);
+
+  if (res.status === 401 && typeof url === 'string' && url.includes('/api/') && !url.includes('/api/auth/login') && !url.includes('/api/auth/register') && !url.includes('/api/auth/status')) {
+    openAuthModal('login', 'Tu sesión ha expirado o requiere autenticación.');
+  }
+
+  return res;
+};
+
 // Estado global de la aplicación
 const state = {
+  currentUser: null,
   notes: [],
   folders: [],
   activeNote: null,
@@ -90,6 +122,14 @@ const modeTogglesEl = document.querySelector('.mode-toggles');
 const markdownToolbarEl = document.getElementById('markdown-toolbar');
 const toolbarHeadingSelect = document.getElementById('toolbar-heading-select');
 const toolbarSizeSelect = document.getElementById('toolbar-size-select');
+const toolbarHeadingDropdown = document.getElementById('toolbar-heading-dropdown');
+const toolbarHeadingTrigger = document.getElementById('toolbar-heading-trigger');
+const toolbarHeadingMenu = document.getElementById('toolbar-heading-menu');
+const toolbarHeadingLabel = document.getElementById('toolbar-heading-label');
+const toolbarSizeDropdown = document.getElementById('toolbar-size-dropdown');
+const toolbarSizeTrigger = document.getElementById('toolbar-size-trigger');
+const toolbarSizeMenu = document.getElementById('toolbar-size-menu');
+const toolbarSizeLabel = document.getElementById('toolbar-size-label');
 
 // Elementos de Carpeta en Editor
 const noteFolderBadge = document.getElementById('note-folder-badge');
@@ -240,15 +280,859 @@ const btnModePreview = document.getElementById('btn-mode-preview');
 const btnModeEdit = document.getElementById('btn-mode-edit');
 
 // ==========================================
+// CONTROLADOR DE AUTENTICACIÓN
+// ==========================================
+const authModal = document.getElementById('auth-modal');
+const tabBtnLogin = document.getElementById('tab-btn-login');
+const tabBtnRegister = document.getElementById('tab-btn-register');
+const formLogin = document.getElementById('form-login');
+const formRegister = document.getElementById('form-register');
+const loginIdentifierInput = document.getElementById('login-identifier');
+const loginPasswordInput = document.getElementById('login-password');
+const btnToggleLoginPwd = document.getElementById('btn-toggle-login-pwd');
+const loginErrorBanner = document.getElementById('login-error-banner');
+const linkGotoRegister = document.getElementById('link-goto-register');
+const linkGotoLogin = document.getElementById('link-goto-login');
+
+const registerNombresInput = document.getElementById('register-nombres');
+const registerPaternoInput = document.getElementById('register-paterno');
+const registerMaternoInput = document.getElementById('register-materno');
+const registerEmailInput = document.getElementById('register-email');
+const registerUsernameInput = document.getElementById('register-username');
+const registerPasswordInput = document.getElementById('register-password');
+const registerConfirmPasswordInput = document.getElementById('register-confirm-password');
+const registerErrorBanner = document.getElementById('register-error-banner');
+const registerSuccessBanner = document.getElementById('register-success-banner');
+
+const sidebarUserSection = document.getElementById('sidebar-user-section');
+const userAvatarInitials = document.getElementById('user-avatar-initials');
+const userNameDisplay = document.getElementById('user-name-display');
+const userHandleDisplay = document.getElementById('user-handle-display');
+const btnUserLogout = document.getElementById('btn-user-logout');
+
+function openAuthModal(mode = 'login', notice = null) {
+  if (!authModal) return;
+  authModal.style.display = 'flex';
+  authModal.setAttribute('aria-hidden', 'false');
+
+  if (loginErrorBanner) {
+    if (notice && mode === 'login') {
+      loginErrorBanner.textContent = notice;
+      loginErrorBanner.style.display = 'block';
+    } else {
+      loginErrorBanner.style.display = 'none';
+    }
+  }
+
+  if (registerErrorBanner) registerErrorBanner.style.display = 'none';
+  if (registerSuccessBanner) registerSuccessBanner.style.display = 'none';
+
+  switchAuthTab(mode);
+}
+
+function closeAuthModal() {
+  if (!authModal) return;
+  authModal.style.display = 'none';
+  authModal.setAttribute('aria-hidden', 'true');
+}
+
+function switchAuthTab(mode) {
+  if (mode === 'register') {
+    tabBtnRegister?.classList.add('active');
+    tabBtnLogin?.classList.remove('active');
+    if (formRegister) formRegister.style.display = 'flex';
+    if (formLogin) formLogin.style.display = 'none';
+    setTimeout(() => registerNombresInput?.focus(), 50);
+  } else {
+    tabBtnLogin?.classList.add('active');
+    tabBtnRegister?.classList.remove('active');
+    if (formLogin) formLogin.style.display = 'flex';
+    if (formRegister) formRegister.style.display = 'none';
+    setTimeout(() => loginIdentifierInput?.focus(), 50);
+  }
+}
+
+function updateUserUI(user) {
+  if (!user) {
+    if (sidebarUserSection) sidebarUserSection.style.display = 'none';
+    return;
+  }
+
+  if (sidebarUserSection) sidebarUserSection.style.display = 'block';
+
+  const n1 = (user.nombres || '').trim().charAt(0).toUpperCase();
+  const n2 = (user.apellido_paterno || '').trim().charAt(0).toUpperCase();
+  if (userAvatarInitials) userAvatarInitials.textContent = `${n1}${n2}` || 'U';
+
+  if (userNameDisplay) {
+    userNameDisplay.textContent = `${user.nombres} ${user.apellido_paterno}`.trim();
+    userNameDisplay.title = `${user.nombre_completo || user.nombres} (${user.email})`;
+  }
+
+  if (userHandleDisplay) {
+    userHandleDisplay.textContent = `@${user.username}`;
+  }
+}
+
+async function checkAuthStatus() {
+  try {
+    const res = await fetch('/api/auth/status');
+    if (!res.ok) {
+      openAuthModal('login');
+      return false;
+    }
+    const data = await res.json();
+
+    if (!data.hasUsers) {
+      // Sistema sin usuarios creados: mostrar pantalla de registro
+      openAuthModal('register');
+      if (registerErrorBanner) {
+        registerErrorBanner.className = 'auth-success-banner';
+        registerErrorBanner.textContent = '¡Bienvenido a Kortexa! Crea tu cuenta para comenzar a utilizar tu bóveda.';
+        registerErrorBanner.style.display = 'block';
+      }
+      return false;
+    }
+
+    if (data.loggedIn && data.user) {
+      state.currentUser = data.user;
+      updateUserUI(data.user);
+      closeAuthModal();
+      return true;
+    }
+
+    openAuthModal('login');
+    return false;
+  } catch (err) {
+    console.error('Error al verificar autenticación:', err);
+    openAuthModal('login');
+    return false;
+  }
+}
+
+function setupAuthEventListeners() {
+  tabBtnLogin?.addEventListener('click', () => switchAuthTab('login'));
+  tabBtnRegister?.addEventListener('click', () => switchAuthTab('register'));
+  linkGotoRegister?.addEventListener('click', (e) => {
+    e.preventDefault();
+    switchAuthTab('register');
+  });
+  linkGotoLogin?.addEventListener('click', (e) => {
+    e.preventDefault();
+    switchAuthTab('login');
+  });
+
+  btnToggleLoginPwd?.addEventListener('click', () => {
+    if (!loginPasswordInput) return;
+    const isPwd = loginPasswordInput.type === 'password';
+    loginPasswordInput.type = isPwd ? 'text' : 'password';
+  });
+
+  formLogin?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (loginErrorBanner) loginErrorBanner.style.display = 'none';
+
+    const usernameOrEmail = (loginIdentifierInput?.value || '').trim();
+    const password = loginPasswordInput?.value || '';
+
+    if (!usernameOrEmail || !password) {
+      if (loginErrorBanner) {
+        loginErrorBanner.textContent = 'Por favor ingresa usuario/correo y contraseña.';
+        loginErrorBanner.style.display = 'block';
+      }
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usernameOrEmail, password })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        if (loginErrorBanner) {
+          loginErrorBanner.textContent = data.error || 'Credenciales incorrectas.';
+          loginErrorBanner.style.display = 'block';
+        }
+        return;
+      }
+
+      localStorage.setItem('kortexa_auth_token', data.token);
+      state.currentUser = data.user;
+      updateUserUI(data.user);
+      closeAuthModal();
+      showToast(`¡Bienvenido, ${data.user.nombres}!`, 'success');
+
+      const isUnlocked = await loadVaultInfo();
+      if (isUnlocked) {
+        await loadNotesAndFolders();
+        restoreOrSelectDefaultNote();
+      }
+    } catch (err) {
+      if (loginErrorBanner) {
+        loginErrorBanner.textContent = 'Error de conexión con el servidor.';
+        loginErrorBanner.style.display = 'block';
+      }
+    }
+  });
+
+  formRegister?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (registerErrorBanner) {
+      registerErrorBanner.className = 'auth-error-banner';
+      registerErrorBanner.style.display = 'none';
+    }
+    if (registerSuccessBanner) registerSuccessBanner.style.display = 'none';
+
+    const nombres = (registerNombresInput?.value || '').trim();
+    const apellido_paterno = (registerPaternoInput?.value || '').trim();
+    const apellido_materno = (registerMaternoInput?.value || '').trim();
+    const email = (registerEmailInput?.value || '').trim();
+    const username = (registerUsernameInput?.value || '').trim();
+    const password = registerPasswordInput?.value || '';
+    const confirm_password = registerConfirmPasswordInput?.value || '';
+
+    if (!nombres || !apellido_paterno || !apellido_materno || !email || !username || !password) {
+      if (registerErrorBanner) {
+        registerErrorBanner.textContent = 'Todos los campos marcados con (*) son obligatorios.';
+        registerErrorBanner.style.display = 'block';
+      }
+      return;
+    }
+
+    if (password !== confirm_password) {
+      if (registerErrorBanner) {
+        registerErrorBanner.textContent = 'Las contraseñas no coinciden. Por favor verifícalas.';
+        registerErrorBanner.style.display = 'block';
+      }
+      registerConfirmPasswordInput?.focus();
+      return;
+    }
+
+    if (password.length < 8) {
+      if (registerErrorBanner) {
+        registerErrorBanner.textContent = 'La contraseña debe tener un mínimo de 8 caracteres.';
+        registerErrorBanner.style.display = 'block';
+      }
+      registerPasswordInput?.focus();
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nombres,
+          apellido_paterno,
+          apellido_materno,
+          email,
+          username,
+          password,
+          confirm_password
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        if (registerErrorBanner) {
+          registerErrorBanner.textContent = data.error || 'Error al registrar usuario.';
+          registerErrorBanner.style.display = 'block';
+        }
+        return;
+      }
+
+      localStorage.setItem('kortexa_auth_token', data.token);
+      state.currentUser = data.user;
+      updateUserUI(data.user);
+      closeAuthModal();
+      showToast(`¡Cuenta creada con éxito! Bienvenido, ${data.user.nombres}`, 'success');
+
+      formRegister.reset();
+
+      const isUnlocked = await loadVaultInfo();
+      if (isUnlocked) {
+        await loadNotesAndFolders();
+        restoreOrSelectDefaultNote();
+      }
+    } catch (err) {
+      if (registerErrorBanner) {
+        registerErrorBanner.textContent = 'Error al comunicarse con el servidor.';
+        registerErrorBanner.style.display = 'block';
+      }
+    }
+  });
+
+  btnUserLogout?.addEventListener('click', async () => {
+    const confirmed = await showConfirmModal({
+      title: 'Cerrar Sesión',
+      message: `¿Deseas cerrar la sesión activa de ${state.currentUser?.username || 'tu cuenta'}?`,
+      confirmText: 'Cerrar Sesión',
+      cancelText: 'Cancelar',
+      danger: true
+    });
+
+    if (!confirmed) return;
+
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {}
+
+    localStorage.removeItem('kortexa_auth_token');
+    localStorage.removeItem('kortexa-last-note');
+    state.currentUser = null;
+    updateUserUI(null);
+
+    state.notes = [];
+    state.folders = [];
+    state.activeNote = null;
+    if (notesListEl) notesListEl.innerHTML = '';
+    if (notesCountEl) notesCountEl.textContent = '0';
+    if (titleInputEl) titleInputEl.value = '';
+    if (markdownInputEl) markdownInputEl.value = '';
+    if (markdownPreviewEl) markdownPreviewEl.innerHTML = '';
+
+    openAuthModal('login', 'Sesión finalizada exitosamente.');
+    showToast('Sesión cerrada correctamente', 'info');
+  });
+
+  // Modal de Mi Cuenta & Cambio de Contraseña
+  const formChangePwd = document.getElementById('form-change-password');
+  const btnCloseAccountModal = document.getElementById('btn-close-account-modal');
+  const btnCancelChgPwd = document.getElementById('btn-cancel-chg-pwd');
+  const btnUserSettings = document.getElementById('btn-user-settings');
+  const accountModal = document.getElementById('account-modal');
+  const userAvatarBadge = document.getElementById('user-avatar-badge');
+  const userInfoTrigger = document.getElementById('user-info-trigger');
+  const btnGeneratePassword = document.getElementById('btn-generate-password');
+
+  const inputCurrentPwd = document.getElementById('chg-current-password');
+  const inputNewPwd = document.getElementById('chg-new-password');
+  const inputConfirmPwd = document.getElementById('chg-confirm-new-password');
+
+  const capsWarnCurrent = document.getElementById('caps-lock-warning-current');
+  const capsWarnNew = document.getElementById('caps-lock-warning-new');
+  const matchIndicator = document.getElementById('match-indicator-badge');
+
+  const strengthLabel = document.getElementById('chg-strength-label');
+  const seg1 = document.getElementById('strength-seg-1');
+  const seg2 = document.getElementById('strength-seg-2');
+  const seg3 = document.getElementById('strength-seg-3');
+  const seg4 = document.getElementById('strength-seg-4');
+
+  const reqLength = document.getElementById('req-length');
+  const reqCases = document.getElementById('req-cases');
+  const reqNumberSym = document.getElementById('req-number-sym');
+  const reqMatch = document.getElementById('req-match');
+
+  const EYE_OPEN_SVG = `<svg class="eye-open-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+  const EYE_CLOSED_SVG = `<svg class="eye-closed-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
+
+  function updateReqItem(el, isMet) {
+    if (!el) return;
+    const icon = el.querySelector('.req-icon');
+    if (isMet) {
+      el.classList.add('req-met');
+      if (icon) icon.textContent = '✓';
+    } else {
+      el.classList.remove('req-met');
+      if (icon) icon.textContent = '○';
+    }
+  }
+
+  function evaluateStrengthUI() {
+    const pwd = inputNewPwd ? inputNewPwd.value : '';
+    const confirm = inputConfirmPwd ? inputConfirmPwd.value : '';
+
+    const hasMinLen = pwd.length >= 8;
+    const hasUpper = /[A-Z]/.test(pwd);
+    const hasLower = /[a-z]/.test(pwd);
+    const hasCases = hasUpper && hasLower;
+    const hasNumOrSym = /[0-9!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/.test(pwd);
+    const hasMatch = Boolean(pwd && confirm && pwd === confirm);
+
+    // Actualizar checklist
+    updateReqItem(reqLength, hasMinLen);
+    updateReqItem(reqCases, hasCases);
+    updateReqItem(reqNumberSym, hasNumOrSym);
+    updateReqItem(reqMatch, hasMatch);
+
+    // Actualizar indicador de coincidencia
+    if (matchIndicator) {
+      if (!confirm) {
+        matchIndicator.style.display = 'none';
+      } else if (hasMatch) {
+        matchIndicator.style.display = 'inline-block';
+        matchIndicator.className = 'account-match-pill match';
+        matchIndicator.textContent = '✓ Coincide';
+      } else {
+        matchIndicator.style.display = 'inline-block';
+        matchIndicator.className = 'account-match-pill no-match';
+        matchIndicator.textContent = '✗ No coincide';
+      }
+    }
+
+    // Calcular puntaje
+    const segments = [seg1, seg2, seg3, seg4];
+    segments.forEach(s => {
+      if (s) s.className = 'strength-bar-seg';
+    });
+
+    if (!pwd) {
+      if (strengthLabel) {
+        strengthLabel.textContent = 'Ingresa una contraseña';
+        strengthLabel.style.color = 'var(--text-muted)';
+      }
+      return;
+    }
+
+    let score = 0;
+    if (hasMinLen) score++;
+    if (hasCases) score++;
+    if (hasNumOrSym) score++;
+    if (pwd.length >= 12 && hasCases && hasNumOrSym) score++;
+
+    if (score === 1) {
+      if (seg1) seg1.classList.add('weak');
+      if (strengthLabel) {
+        strengthLabel.textContent = 'Débil';
+        strengthLabel.style.color = '#ef4444';
+      }
+    } else if (score === 2) {
+      if (seg1) seg1.classList.add('medium');
+      if (seg2) seg2.classList.add('medium');
+      if (strengthLabel) {
+        strengthLabel.textContent = 'Regular';
+        strengthLabel.style.color = '#f59e0b';
+      }
+    } else if (score === 3) {
+      if (seg1) seg1.classList.add('good');
+      if (seg2) seg2.classList.add('good');
+      if (seg3) seg3.classList.add('good');
+      if (strengthLabel) {
+        strengthLabel.textContent = 'Buena';
+        strengthLabel.style.color = '#06b6d4';
+      }
+    } else if (score >= 4) {
+      if (seg1) seg1.classList.add('strong');
+      if (seg2) seg2.classList.add('strong');
+      if (seg3) seg3.classList.add('strong');
+      if (seg4) seg4.classList.add('strong');
+      if (strengthLabel) {
+        strengthLabel.textContent = 'Excelente';
+        strengthLabel.style.color = '#10b981';
+      }
+    }
+  }
+
+  function handleCapsLock(e, warnEl) {
+    if (!warnEl) return;
+    if (e.getModifierState && e.getModifierState('CapsLock')) {
+      warnEl.style.display = 'inline-block';
+    } else {
+      warnEl.style.display = 'none';
+    }
+  }
+
+  [inputCurrentPwd, inputNewPwd, inputConfirmPwd].forEach(input => {
+    if (!input) return;
+    const warnEl = input === inputCurrentPwd ? capsWarnCurrent : capsWarnNew;
+    input.addEventListener('keyup', (e) => handleCapsLock(e, warnEl));
+    input.addEventListener('keydown', (e) => handleCapsLock(e, warnEl));
+  });
+
+  inputNewPwd?.addEventListener('input', evaluateStrengthUI);
+  inputConfirmPwd?.addEventListener('input', evaluateStrengthUI);
+
+  // Generador automático de contraseñas seguras
+  btnGeneratePassword?.addEventListener('click', () => {
+    const chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789!@#$%&*?_';
+    const uppers = 'ABCDEFGHJKMNPQRSTUVWXYZ';
+    const lowers = 'abcdefghjkmnpqrstuvwxyz';
+    const nums = '23456789';
+    const syms = '!@#$%&*?_';
+
+    let pwd = '';
+    pwd += uppers[Math.floor(Math.random() * uppers.length)];
+    pwd += lowers[Math.floor(Math.random() * lowers.length)];
+    pwd += nums[Math.floor(Math.random() * nums.length)];
+    pwd += syms[Math.floor(Math.random() * syms.length)];
+
+    for (let i = 4; i < 16; i++) {
+      pwd += chars[Math.floor(Math.random() * chars.length)];
+    }
+    pwd = pwd.split('').sort(() => 0.5 - Math.random()).join('');
+
+    if (inputNewPwd) {
+      inputNewPwd.value = pwd;
+      inputNewPwd.type = 'text';
+    }
+    if (inputConfirmPwd) {
+      inputConfirmPwd.value = pwd;
+      inputConfirmPwd.type = 'text';
+    }
+
+    const btnToggleNew = document.getElementById('btn-toggle-chg-new-pwd');
+    const btnToggleConfirm = document.getElementById('btn-toggle-chg-confirm-pwd');
+    if (btnToggleNew) btnToggleNew.innerHTML = EYE_CLOSED_SVG;
+    if (btnToggleConfirm) btnToggleConfirm.innerHTML = EYE_CLOSED_SVG;
+
+    evaluateStrengthUI();
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(pwd).then(() => {
+        showToast('🔑 Contraseña segura generada y copiada al portapapeles', 'info');
+      }).catch(() => {
+        showToast('🔑 Contraseña segura generada en el formulario', 'info');
+      });
+    } else {
+      showToast('🔑 Contraseña segura generada en el formulario', 'info');
+    }
+  });
+
+  function openAccountModal() {
+    if (!accountModal || !state.currentUser) return;
+
+    const user = state.currentUser;
+    const avatarEl = document.getElementById('account-modal-avatar');
+    const fullnameEl = document.getElementById('account-modal-fullname');
+    const usernameEl = document.getElementById('account-modal-username');
+    const emailEl = document.getElementById('account-modal-email');
+    const errBanner = document.getElementById('chg-pwd-error-banner');
+    const succBanner = document.getElementById('chg-pwd-success-banner');
+
+    if (formChangePwd) formChangePwd.reset();
+    if (errBanner) errBanner.style.display = 'none';
+    if (succBanner) succBanner.style.display = 'none';
+    if (capsWarnCurrent) capsWarnCurrent.style.display = 'none';
+    if (capsWarnNew) capsWarnNew.style.display = 'none';
+    if (matchIndicator) matchIndicator.style.display = 'none';
+
+    // Reset password types
+    ['chg-current', 'chg-new', 'chg-confirm'].forEach(prefix => {
+      const input = document.getElementById(`${prefix}-password`);
+      const btn = document.getElementById(`btn-toggle-${prefix}-pwd`);
+      if (input) input.type = 'password';
+      if (btn) btn.innerHTML = EYE_OPEN_SVG;
+    });
+
+    evaluateStrengthUI();
+
+    const n1 = (user.nombres || '').trim().charAt(0).toUpperCase();
+    const n2 = (user.apellido_paterno || '').trim().charAt(0).toUpperCase();
+    if (avatarEl) avatarEl.textContent = `${n1}${n2}` || 'U';
+    if (fullnameEl) fullnameEl.textContent = user.nombre_completo || `${user.nombres} ${user.apellido_paterno} ${user.apellido_materno || ''}`.trim();
+    if (usernameEl) usernameEl.textContent = `@${user.username}`;
+    if (emailEl) emailEl.textContent = user.email;
+
+    accountModal.classList.add('active');
+    accountModal.setAttribute('aria-hidden', 'false');
+    switchAccountTab('security');
+    loadMcpSettings();
+    setTimeout(() => {
+      document.getElementById('chg-current-password')?.focus();
+    }, 80);
+  }
+
+  function closeAccountModal() {
+    if (accountModal) {
+      accountModal.classList.remove('active');
+      accountModal.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  btnUserSettings?.addEventListener('click', openAccountModal);
+  userAvatarBadge?.addEventListener('click', openAccountModal);
+  userInfoTrigger?.addEventListener('click', openAccountModal);
+  btnCloseAccountModal?.addEventListener('click', closeAccountModal);
+  btnCancelChgPwd?.addEventListener('click', closeAccountModal);
+  accountModal?.addEventListener('click', (e) => {
+    if (e.target === accountModal) closeAccountModal();
+  });
+
+  // Pestañas del Modal de Cuenta
+  const btnTabSecurity = document.getElementById('btn-account-tab-security');
+  const btnTabMcp = document.getElementById('btn-account-tab-mcp');
+  const panelSecurity = document.getElementById('account-panel-security');
+  const panelMcp = document.getElementById('account-panel-mcp');
+
+  function switchAccountTab(tabName) {
+    if (tabName === 'security') {
+      btnTabSecurity?.classList.add('active');
+      btnTabMcp?.classList.remove('active');
+      if (panelSecurity) {
+        panelSecurity.classList.add('active');
+        panelSecurity.style.display = 'flex';
+      }
+      if (panelMcp) {
+        panelMcp.classList.remove('active');
+        panelMcp.style.display = 'none';
+      }
+    } else if (tabName === 'mcp') {
+      btnTabMcp?.classList.add('active');
+      btnTabSecurity?.classList.remove('active');
+      if (panelMcp) {
+        panelMcp.classList.add('active');
+        panelMcp.style.display = 'flex';
+      }
+      if (panelSecurity) {
+        panelSecurity.classList.remove('active');
+        panelSecurity.style.display = 'none';
+      }
+      loadMcpSettings();
+    }
+  }
+
+  btnTabSecurity?.addEventListener('click', () => switchAccountTab('security'));
+  btnTabMcp?.addEventListener('click', () => switchAccountTab('mcp'));
+  document.getElementById('btn-close-mcp-panel')?.addEventListener('click', closeAccountModal);
+
+  // Lógica de Integración MCP
+  const toggleMcpEnabled = document.getElementById('mcp-toggle-switch');
+  const mcpTabPill = document.getElementById('account-mcp-tab-pill');
+  const mcpStatusBadge = document.getElementById('mcp-status-text-badge');
+  const mcpTokenInput = document.getElementById('mcp-token-input');
+  const btnToggleMcpToken = document.getElementById('btn-toggle-mcp-token');
+  const btnCopyMcpToken = document.getElementById('btn-copy-mcp-token');
+  const btnRegenMcpToken = document.getElementById('btn-regen-mcp-token');
+  const btnCopyMcpConfig = document.getElementById('btn-copy-mcp-config');
+  const mcpConfigCode = document.getElementById('mcp-config-snippet-code');
+  const mcpDetailsSection = document.getElementById('mcp-config-details-section');
+
+  let currentMcpConfig = null;
+
+  function updateMcpUI(enabled, token, config) {
+    const isEn = Boolean(enabled);
+    if (toggleMcpEnabled) toggleMcpEnabled.checked = isEn;
+
+    if (mcpTabPill) {
+      mcpTabPill.className = `account-mcp-status-pill ${isEn ? 'active' : 'inactive'}`;
+      mcpTabPill.textContent = isEn ? 'Activo' : 'Inactivo';
+    }
+
+    if (mcpStatusBadge) {
+      mcpStatusBadge.className = `account-mcp-status-pill ${isEn ? 'active' : 'inactive'}`;
+      mcpStatusBadge.textContent = isEn ? 'Habilitado' : 'Deshabilitado';
+    }
+
+    if (mcpTokenInput && token) {
+      mcpTokenInput.value = token;
+    }
+
+    if (config) {
+      currentMcpConfig = config;
+      if (mcpConfigCode) {
+        mcpConfigCode.textContent = JSON.stringify(config, null, 2);
+      }
+    }
+
+    if (mcpDetailsSection) {
+      mcpDetailsSection.style.opacity = isEn ? '1' : '0.45';
+      mcpDetailsSection.style.pointerEvents = isEn ? 'auto' : 'none';
+    }
+  }
+
+  async function loadMcpSettings() {
+    try {
+      const res = await fetch('/api/user/mcp-settings');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.success) {
+        updateMcpUI(data.mcp_enabled, data.mcp_token, data.config_snippet);
+      }
+    } catch (err) {
+      console.error('Error al cargar configuración MCP:', err);
+    }
+  }
+
+  toggleMcpEnabled?.addEventListener('change', async () => {
+    const isEnabled = toggleMcpEnabled.checked;
+    try {
+      const res = await fetch('/api/user/mcp-toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: isEnabled })
+      });
+      const data = await res.json();
+      if (data.success) {
+        updateMcpUI(data.mcp_enabled, mcpTokenInput?.value, currentMcpConfig);
+        showToast(data.message, isEnabled ? 'success' : 'info');
+      } else {
+        toggleMcpEnabled.checked = !isEnabled;
+        showToast(data.error || 'No se pudo cambiar el estado MCP', 'error');
+      }
+    } catch {
+      toggleMcpEnabled.checked = !isEnabled;
+      showToast('Error de conexión al actualizar MCP', 'error');
+    }
+  });
+
+  btnToggleMcpToken?.addEventListener('click', () => {
+    if (!mcpTokenInput) return;
+    const isPwd = mcpTokenInput.type === 'password';
+    mcpTokenInput.type = isPwd ? 'text' : 'password';
+    btnToggleMcpToken.innerHTML = isPwd ? EYE_CLOSED_SVG : EYE_OPEN_SVG;
+  });
+
+  btnCopyMcpToken?.addEventListener('click', () => {
+    if (!mcpTokenInput || !mcpTokenInput.value) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(mcpTokenInput.value).then(() => {
+        showToast('📋 Token de acceso MCP copiado', 'info');
+      });
+    }
+  });
+
+  btnRegenMcpToken?.addEventListener('click', async () => {
+    if (!confirm('¿Estás seguro de que deseas regenerar el token MCP? El token anterior dejará de funcionar en tus clientes IA.')) {
+      return;
+    }
+    try {
+      const res = await fetch('/api/user/mcp-regenerate-token', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        if (mcpTokenInput) mcpTokenInput.value = data.mcp_token;
+        if (currentMcpConfig?.mcpServers?.kortexa?.env) {
+          currentMcpConfig.mcpServers.kortexa.env.VAULT_AUTH_TOKEN = data.mcp_token;
+          if (mcpConfigCode) {
+            mcpConfigCode.textContent = JSON.stringify(currentMcpConfig, null, 2);
+          }
+        }
+        showToast('🔑 Nuevo token MCP generado exitosamente', 'success');
+      } else {
+        showToast(data.error || 'No se pudo regenerar el token', 'error');
+      }
+    } catch {
+      showToast('Error de conexión al regenerar token', 'error');
+    }
+  });
+
+  btnCopyMcpConfig?.addEventListener('click', () => {
+    if (!mcpConfigCode || !mcpConfigCode.textContent) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(mcpConfigCode.textContent).then(() => {
+        showToast('📋 Configuración JSON de Claude Desktop copiada', 'success');
+      });
+    }
+  });
+
+  // Toggles de contraseña en modal de cuenta con cambio de icono SVG
+  ['chg-current', 'chg-new', 'chg-confirm'].forEach(prefix => {
+    const input = document.getElementById(`${prefix}-password`);
+    const btn = document.getElementById(`btn-toggle-${prefix}-pwd`);
+    btn?.addEventListener('click', () => {
+      if (!input) return;
+      const isPwd = input.type === 'password';
+      input.type = isPwd ? 'text' : 'password';
+      btn.innerHTML = isPwd ? EYE_CLOSED_SVG : EYE_OPEN_SVG;
+    });
+  });
+
+  formChangePwd?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errBanner = document.getElementById('chg-pwd-error-banner');
+    const succBanner = document.getElementById('chg-pwd-success-banner');
+    const btnSubmit = document.getElementById('btn-submit-chg-pwd');
+    const btnText = document.getElementById('btn-submit-chg-pwd-text');
+
+    if (errBanner) errBanner.style.display = 'none';
+    if (succBanner) succBanner.style.display = 'none';
+
+    const currentPassword = inputCurrentPwd?.value || '';
+    const newPassword = inputNewPwd?.value || '';
+    const confirmNewPassword = inputConfirmPwd?.value || '';
+
+    if (!currentPassword) {
+      if (errBanner) {
+        errBanner.textContent = 'Por favor ingresa tu contraseña actual.';
+        errBanner.style.display = 'block';
+      }
+      return;
+    }
+
+    if (!newPassword || newPassword.length < 8) {
+      if (errBanner) {
+        errBanner.textContent = 'La nueva contraseña debe tener al menos 8 caracteres.';
+        errBanner.style.display = 'block';
+      }
+      return;
+    }
+
+    if (newPassword !== confirmNewPassword) {
+      if (errBanner) {
+        errBanner.textContent = 'La confirmación de la nueva contraseña no coincide.';
+        errBanner.style.display = 'block';
+      }
+      return;
+    }
+
+    if (currentPassword === newPassword) {
+      if (errBanner) {
+        errBanner.textContent = 'La nueva contraseña debe ser distinta a la contraseña actual.';
+        errBanner.style.display = 'block';
+      }
+      return;
+    }
+
+    try {
+      if (btnSubmit) btnSubmit.disabled = true;
+      if (btnText) btnText.textContent = 'Actualizando...';
+
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword, newPassword, confirmNewPassword })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        if (errBanner) {
+          errBanner.textContent = data.error || 'No se pudo actualizar la contraseña.';
+          errBanner.style.display = 'block';
+        }
+        return;
+      }
+
+      formChangePwd.reset();
+      evaluateStrengthUI();
+      if (succBanner) {
+        succBanner.textContent = '¡Contraseña actualizada con éxito!';
+        succBanner.style.display = 'block';
+      }
+      showToast('Contraseña actualizada con éxito', 'success');
+
+      setTimeout(() => {
+        closeAccountModal();
+      }, 1500);
+    } catch (err) {
+      if (errBanner) {
+        errBanner.textContent = 'Error de conexión con el servidor.';
+        errBanner.style.display = 'block';
+      }
+    } finally {
+      if (btnSubmit) btnSubmit.disabled = false;
+      if (btnText) btnText.textContent = 'Guardar Contraseña';
+    }
+  });
+}
+
+// ==========================================
 // 1. INICIALIZACIÓN
 // ==========================================
 async function init() {
   applyTheme(state.theme);
   setupEventListeners();
-  const isUnlocked = await loadVaultInfo();
-  if (isUnlocked) {
-    await loadNotesAndFolders();
-    restoreOrSelectDefaultNote();
+  setupAuthEventListeners();
+
+  const isAuth = await checkAuthStatus();
+  if (isAuth) {
+    const isUnlocked = await loadVaultInfo();
+    if (isUnlocked) {
+      await loadNotesAndFolders();
+      restoreOrSelectDefaultNote();
+    }
   }
 }
 
@@ -1695,8 +2579,93 @@ function renderMarkdown() {
   // 3. Soporte de resaltado ==texto== (estilo Obsidian)
   processedText = processedText.replace(/==([^=\n]+)==/g, '<mark class="md-highlight">$1</mark>');
 
+  // 4. Extracción de Diagramas Mermaid (```mermaid ... ```) para proteger su código
+  const mermaidBlocks = [];
+  processedText = processedText.replace(/```mermaid\s*([\s\S]*?)```/gi, (match, code) => {
+    const placeholder = `%%KORTEXA_MERMAID_BLOCK_${mermaidBlocks.length}%%`;
+    mermaidBlocks.push(code.trim());
+    return `\n\n${placeholder}\n\n`;
+  });
+
+  // 5. Extracción de Ecuaciones Matemáticas KaTeX (LaTeX) para protegerlas del parser Markdown
+  const mathBlocks = [];
+  processedText = processedText.replace(/\$\$([\s\S]*?)\$\$/g, (match, expr) => {
+    const placeholder = `%%KORTEXA_MATH_BLOCK_${mathBlocks.length}%%`;
+    mathBlocks.push(expr);
+    return `\n\n${placeholder}\n\n`;
+  });
+
+  const mathInlines = [];
+  processedText = processedText.replace(/(?<!\\)\$([^\$\n]+?)(?<!\\)\$/g, (match, expr) => {
+    const placeholder = `%%KORTEXA_MATH_INLINE_${mathInlines.length}%%`;
+    mathInlines.push(expr);
+    return placeholder;
+  });
+
   // Renderizar Markdown a HTML con Marked
-  markdownPreviewEl.innerHTML = marked.parse(processedText);
+  let parsedHtml = marked.parse(processedText);
+
+  // Reinsertar Diagramas Mermaid
+  mermaidBlocks.forEach((code, idx) => {
+    const placeholder = `%%KORTEXA_MERMAID_BLOCK_${idx}%%`;
+    const diagramId = `mermaid-diag-${idx}-${Math.random().toString(36).substring(2, 7)}`;
+    const wrapperHtml = `<div class="mermaid-wrapper" data-diagram-id="${diagramId}">
+      <div class="mermaid-toolbar">
+        <button type="button" class="mermaid-tool-btn btn-diagram-zoom-in" title="Acercar (+)">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+        </button>
+        <button type="button" class="mermaid-tool-btn btn-diagram-zoom-out" title="Alejar (-)">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+        </button>
+        <button type="button" class="mermaid-tool-btn btn-diagram-zoom-reset" title="Restablecer (100%)">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+        </button>
+        <button type="button" class="mermaid-tool-btn btn-diagram-fullscreen" title="Pantalla Completa (⛶)">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+        </button>
+      </div>
+      <div class="mermaid-viewport">
+        <div class="mermaid" id="${diagramId}" data-code="${encodeURIComponent(code)}">${escapeHtml(code)}</div>
+      </div>
+    </div>`;
+    parsedHtml = parsedHtml.replace(new RegExp(`<p>\\s*${placeholder}\\s*<\\/p>`, 'g'), () => wrapperHtml);
+    parsedHtml = parsedHtml.replace(placeholder, () => wrapperHtml);
+  });
+
+  // Reinsertar Ecuaciones en Bloque KaTeX
+  mathBlocks.forEach((expr, idx) => {
+    const placeholder = `%%KORTEXA_MATH_BLOCK_${idx}%%`;
+    let rendered = '';
+    if (window.katex) {
+      try {
+        rendered = `<div class="katex-display-wrapper">${window.katex.renderToString(expr.trim(), { displayMode: true, throwOnError: false })}</div>`;
+      } catch (err) {
+        rendered = `<div class="katex-error-wrapper">Error LaTeX: ${escapeHtml(expr)}</div>`;
+      }
+    } else {
+      rendered = `<pre class="katex-fallback">$$${escapeHtml(expr)}$$</pre>`;
+    }
+    parsedHtml = parsedHtml.replace(new RegExp(`<p>\\s*${placeholder}\\s*<\\/p>`, 'g'), () => rendered);
+    parsedHtml = parsedHtml.replace(placeholder, () => rendered);
+  });
+
+  // Reinsertar Ecuaciones en Línea KaTeX
+  mathInlines.forEach((expr, idx) => {
+    const placeholder = `%%KORTEXA_MATH_INLINE_${idx}%%`;
+    let rendered = '';
+    if (window.katex) {
+      try {
+        rendered = `<span class="katex-inline-wrapper">${window.katex.renderToString(expr.trim(), { displayMode: false, throwOnError: false })}</span>`;
+      } catch (err) {
+        rendered = `<span class="katex-error-wrapper">$${escapeHtml(expr)}$</span>`;
+      }
+    } else {
+      rendered = `<code class="katex-fallback">$${escapeHtml(expr)}$</code>`;
+    }
+    parsedHtml = parsedHtml.replace(placeholder, () => rendered);
+  });
+
+  markdownPreviewEl.innerHTML = parsedHtml;
 
   // Remapear imágenes estándar de markdown ![alt](ruta-relativa)
   markdownPreviewEl.querySelectorAll('img').forEach(img => {
@@ -1723,6 +2692,9 @@ function renderMarkdown() {
 
   // 4. Procesar e incrustar Hojas de Cálculo FortuneSheet (Excel interactivo)
   processFortuneSheetsInPreview();
+
+  // 5. Renderizar Diagramas Mermaid (Flujo, ER, Clases, etc.)
+  renderMermaidDiagramsInPreview();
 }
 
 // ==========================================
@@ -1991,6 +2963,24 @@ function applyTheme(mode) {
   if (state.activeTab === 'graph' && state.graphInstance) {
     renderGraph();
   }
+
+  // Refrescar diagramas Mermaid al cambiar de tema (claro / oscuro)
+  if (typeof renderMermaidDiagramsInPreview === 'function') {
+    renderMermaidDiagramsInPreview();
+  }
+
+  // Refrescar hojas de cálculo FortuneSheet al cambiar de tema
+  notifyFortuneSheetsThemeChange();
+}
+
+function notifyFortuneSheetsThemeChange() {
+  setTimeout(() => {
+    window.dispatchEvent(new Event('resize'));
+    const canvases = document.querySelectorAll('.fortune-sheet-canvas');
+    canvases.forEach(canvas => {
+      canvas.style.transform = 'translateZ(0)';
+    });
+  }, 60);
 }
 
 // ==========================================
@@ -2313,6 +3303,9 @@ function setupEventListeners() {
   setupAudioPickerEventListeners();
   setupVoiceRecorderEventListeners();
   setupFortuneSheetEventListeners();
+  setupMathEquationEventListeners();
+  setupDiagramEventListeners();
+  setupDiagramFullscreenEventListeners();
 
   // Selector de tema (Claro, Oscuro, Automático)
   themeBtnLight?.addEventListener('click', () => applyTheme('light'));
@@ -2602,6 +3595,16 @@ function applyMarkdownFormat(action, extraValue) {
       return;
     }
 
+    case 'math': {
+      openMathEquationModal(selectedText);
+      return;
+    }
+
+    case 'diagram': {
+      openDiagramModal(selectedText);
+      return;
+    }
+
     case 'record-audio': {
       openVoiceRecorderModal();
       return;
@@ -2631,23 +3634,166 @@ function setupMarkdownToolbar() {
     });
   });
 
-  // Selector de Encabezados
-  if (toolbarHeadingSelect) {
-    toolbarHeadingSelect.addEventListener('change', () => {
-      const val = toolbarHeadingSelect.value;
-      applyMarkdownFormat('heading', val);
-      toolbarHeadingSelect.value = 'p';
-    });
+  // Control de apertura/cierre de los dropdowns del toolbar (estilo selector de bóvedas)
+  function toggleToolbarHeadingDropdown(e) {
+    if (e) e.stopPropagation();
+    const isOpen = toolbarHeadingDropdown?.classList.contains('open');
+    closeAllToolbarDropdowns();
+    if (!isOpen && toolbarHeadingDropdown) {
+      toolbarHeadingDropdown.classList.add('open');
+      toolbarHeadingTrigger?.setAttribute('aria-expanded', 'true');
+    }
   }
 
-  // Selector de Tamaño
-  if (toolbarSizeSelect) {
-    toolbarSizeSelect.addEventListener('change', () => {
-      const val = toolbarSizeSelect.value;
-      applyMarkdownFormat('size', val);
-      toolbarSizeSelect.value = 'normal';
-    });
+  function toggleToolbarSizeDropdown(e) {
+    if (e) e.stopPropagation();
+    const isOpen = toolbarSizeDropdown?.classList.contains('open');
+    closeAllToolbarDropdowns();
+    if (!isOpen && toolbarSizeDropdown) {
+      toolbarSizeDropdown.classList.add('open');
+      toolbarSizeTrigger?.setAttribute('aria-expanded', 'true');
+    }
   }
+
+  function closeAllToolbarDropdowns() {
+    if (toolbarHeadingDropdown) {
+      toolbarHeadingDropdown.classList.remove('open');
+      toolbarHeadingTrigger?.setAttribute('aria-expanded', 'false');
+    }
+    if (toolbarSizeDropdown) {
+      toolbarSizeDropdown.classList.remove('open');
+      toolbarSizeTrigger?.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  const headingLabelsMap = {
+    p: 'Párrafo Normal',
+    h1: 'Título 1 (H1)',
+    h2: 'Título 2 (H2)',
+    h3: 'Título 3 (H3)',
+    h4: 'Título 4 (H4)',
+    h5: 'Título 5 (H5)',
+    h6: 'Título 6 (H6)'
+  };
+
+  const sizeLabelsMap = {
+    normal: 'Tamaño Normal',
+    huge: 'Muy Grande (160%)',
+    large: 'Grande (135%)',
+    medium: 'Mediano (115%)',
+    small: 'Pequeño (85%)'
+  };
+
+  function setToolbarHeadingUI(val) {
+    if (toolbarHeadingLabel && headingLabelsMap[val]) {
+      toolbarHeadingLabel.textContent = headingLabelsMap[val];
+    }
+    document.querySelectorAll('#toolbar-heading-menu .custom-toolbar-item').forEach(it => {
+      it.classList.toggle('active', it.getAttribute('data-value') === val);
+    });
+    if (toolbarHeadingSelect) toolbarHeadingSelect.value = val;
+  }
+
+  function setToolbarSizeUI(val) {
+    if (toolbarSizeLabel && sizeLabelsMap[val]) {
+      toolbarSizeLabel.textContent = sizeLabelsMap[val];
+    }
+    document.querySelectorAll('#toolbar-size-menu .custom-toolbar-item').forEach(it => {
+      it.classList.toggle('active', it.getAttribute('data-value') === val);
+    });
+    if (toolbarSizeSelect) toolbarSizeSelect.value = val;
+  }
+
+  // Eventos de apertura de dropdowns
+  toolbarHeadingTrigger?.addEventListener('click', toggleToolbarHeadingDropdown);
+  toolbarSizeTrigger?.addEventListener('click', toggleToolbarSizeDropdown);
+
+  // Selección de opciones de Encabezado
+  document.querySelectorAll('#toolbar-heading-menu .custom-toolbar-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const val = item.getAttribute('data-value') || 'p';
+      applyMarkdownFormat('heading', val);
+      setToolbarHeadingUI(val);
+      closeAllToolbarDropdowns();
+      markdownInputEl?.focus();
+    });
+  });
+
+  // Selección de opciones de Tamaño
+  document.querySelectorAll('#toolbar-size-menu .custom-toolbar-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const val = item.getAttribute('data-value') || 'normal';
+      applyMarkdownFormat('size', val);
+      setToolbarSizeUI(val);
+      closeAllToolbarDropdowns();
+      markdownInputEl?.focus();
+    });
+  });
+
+  // Sincronización si cambian selects nativos (por compatibilidad o scripts)
+  toolbarHeadingSelect?.addEventListener('change', () => {
+    const val = toolbarHeadingSelect.value;
+    applyMarkdownFormat('heading', val);
+    setToolbarHeadingUI(val);
+  });
+
+  toolbarSizeSelect?.addEventListener('change', () => {
+    const val = toolbarSizeSelect.value;
+    applyMarkdownFormat('size', val);
+    setToolbarSizeUI(val);
+  });
+
+  // Cerrar al hacer clic fuera o presionar Escape
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#toolbar-heading-dropdown') && !e.target.closest('#toolbar-size-dropdown')) {
+      closeAllToolbarDropdowns();
+    }
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeAllToolbarDropdowns();
+    }
+  });
+
+  // Detección contextual dinámica según la línea en la que se ubica el cursor
+  function updateToolbarFromCursor() {
+    if (!markdownInputEl) return;
+    const start = markdownInputEl.selectionStart;
+    const fullText = markdownInputEl.value;
+    const lineStart = fullText.lastIndexOf('\n', start - 1) + 1;
+    let lineEnd = fullText.indexOf('\n', start);
+    if (lineEnd === -1) lineEnd = fullText.length;
+    const currentLine = fullText.substring(lineStart, lineEnd).trimStart();
+
+    let hVal = 'p';
+    let sVal = 'normal';
+    if (currentLine.startsWith('# ')) {
+      hVal = 'h1';
+      sVal = 'huge';
+    } else if (currentLine.startsWith('## ')) {
+      hVal = 'h2';
+      sVal = 'large';
+    } else if (currentLine.startsWith('### ')) {
+      hVal = 'h3';
+      sVal = 'medium';
+    } else if (currentLine.startsWith('#### ')) {
+      hVal = 'h4';
+    } else if (currentLine.startsWith('##### ')) {
+      hVal = 'h5';
+    } else if (currentLine.startsWith('###### ')) {
+      hVal = 'h6';
+    }
+
+    setToolbarHeadingUI(hVal);
+    setToolbarSizeUI(sVal);
+  }
+
+  markdownInputEl?.addEventListener('keyup', updateToolbarFromCursor);
+  markdownInputEl?.addEventListener('click', updateToolbarFromCursor);
+  markdownInputEl?.addEventListener('select', updateToolbarFromCursor);
 
   // Atajos de teclado en el editor Markdown
   markdownInputEl.addEventListener('keydown', (e) => {
@@ -3968,6 +5114,867 @@ function setupFortuneSheetEventListeners() {
 function setActiveModeBtn(btn) {
   [btnModeSplit, btnModePreview, btnModeEdit].forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
+}
+
+// ==========================================
+// 15. ASISTENTE DE ECUACIONES MATEMÁTICAS (KATEX / LATEX)
+// ==========================================
+let currentMathMode = 'block'; // 'block' | 'inline'
+
+function openMathEquationModal(initialText = '') {
+  const modal = document.getElementById('math-equation-modal');
+  const input = document.getElementById('math-equation-input');
+  if (!modal || !input) return;
+
+  // Si había texto seleccionado, quitar posibles delimitadores $ o $$
+  let cleaned = (initialText || '').trim();
+  if (cleaned.startsWith('$$') && cleaned.endsWith('$$')) {
+    cleaned = cleaned.substring(2, cleaned.length - 2).trim();
+    currentMathMode = 'block';
+  } else if (cleaned.startsWith('$') && cleaned.endsWith('$')) {
+    cleaned = cleaned.substring(1, cleaned.length - 1).trim();
+    currentMathMode = 'inline';
+  } else if (cleaned) {
+    currentMathMode = cleaned.includes('\n') ? 'block' : 'inline';
+  } else {
+    currentMathMode = 'block';
+  }
+
+  input.value = cleaned || 'f(x) = \\int_{0}^{\\infty} e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}';
+  updateMathModeUI();
+  updateMathEquationPreview();
+
+  modal.classList.add('active');
+  modal.setAttribute('aria-hidden', 'false');
+  setTimeout(() => {
+    input.focus();
+    input.select();
+  }, 60);
+}
+
+function closeMathEquationModal() {
+  const modal = document.getElementById('math-equation-modal');
+  if (modal) {
+    modal.classList.remove('active');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+  markdownInputEl?.focus();
+}
+
+function updateMathModeUI() {
+  const btnBlock = document.getElementById('math-mode-block');
+  const btnInline = document.getElementById('math-mode-inline');
+  if (btnBlock) btnBlock.classList.toggle('active', currentMathMode === 'block');
+  if (btnInline) btnInline.classList.toggle('active', currentMathMode === 'inline');
+}
+
+function updateMathEquationPreview() {
+  const input = document.getElementById('math-equation-input');
+  const preview = document.getElementById('math-equation-preview');
+  if (!input || !preview) return;
+
+  const raw = input.value.trim();
+  if (!raw) {
+    preview.innerHTML = '<span class="math-preview-placeholder">Escribe una fórmula o presiona una plantilla para previsualizar...</span>';
+    return;
+  }
+
+  if (window.katex) {
+    try {
+      const isBlock = currentMathMode === 'block';
+      const rendered = window.katex.renderToString(raw, {
+        displayMode: isBlock,
+        throwOnError: false
+      });
+      preview.innerHTML = rendered;
+    } catch (e) {
+      preview.innerHTML = `<span class="katex-error-wrapper">Error de sintaxis: ${escapeHtml(e.message)}</span>`;
+    }
+  } else {
+    preview.innerHTML = `<code>${escapeHtml(raw)}</code>`;
+  }
+}
+
+function insertMathEquationIntoEditor() {
+  const input = document.getElementById('math-equation-input');
+  if (!input || !markdownInputEl) return;
+
+  const code = input.value.trim();
+  if (!code) {
+    closeMathEquationModal();
+    return;
+  }
+
+  const isBlock = currentMathMode === 'block';
+  const snippet = isBlock ? `\n$$\n${code}\n$$\n` : `$${code}$`;
+
+  const textarea = markdownInputEl;
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const fullText = textarea.value;
+
+  textarea.value = fullText.substring(0, start) + snippet + fullText.substring(end);
+  const newPos = start + snippet.length;
+  textarea.setSelectionRange(newPos, newPos);
+  textarea.focus();
+
+  closeMathEquationModal();
+  renderMarkdown();
+  scheduleSave();
+}
+
+function setupMathEquationEventListeners() {
+  const btnBlock = document.getElementById('math-mode-block');
+  const btnInline = document.getElementById('math-mode-inline');
+  const input = document.getElementById('math-equation-input');
+  const btnClose = document.getElementById('btn-close-math-modal');
+  const btnInsert = document.getElementById('btn-insert-math-equation');
+  const modal = document.getElementById('math-equation-modal');
+
+  btnBlock?.addEventListener('click', () => {
+    currentMathMode = 'block';
+    updateMathModeUI();
+    updateMathEquationPreview();
+  });
+
+  btnInline?.addEventListener('click', () => {
+    currentMathMode = 'inline';
+    updateMathModeUI();
+    updateMathEquationPreview();
+  });
+
+  input?.addEventListener('input', updateMathEquationPreview);
+
+  // Chips de plantillas rápidas
+  document.querySelectorAll('.math-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const snippet = chip.getAttribute('data-insert');
+      if (!snippet || !input) return;
+
+      const s = input.selectionStart;
+      const e = input.selectionEnd;
+      const val = input.value;
+      input.value = val.substring(0, s) + snippet + val.substring(e);
+      const newPos = s + snippet.length;
+      input.focus();
+      input.setSelectionRange(newPos, newPos);
+      updateMathEquationPreview();
+    });
+  });
+
+  btnClose?.addEventListener('click', closeMathEquationModal);
+  btnInsert?.addEventListener('click', insertMathEquationIntoEditor);
+
+  modal?.addEventListener('click', (e) => {
+    if (e.target === modal) closeMathEquationModal();
+  });
+
+  // Atajo Enter con Ctrl/Cmd para insertar rápido
+  input?.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      insertMathEquationIntoEditor();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeMathEquationModal();
+    }
+  });
+}
+
+// ==========================================
+// 16. RENDERIZADO Y ASISTENTE DE DIAGRAMAS (MERMAID JS)
+// ==========================================
+const DIAGRAM_TEMPLATES = {
+  flowchart: `flowchart TD
+    Inicio([Inicio]) --> Validar{¿Datos válidos?}
+    Validar -->|Sí| Procesar[Procesar Registro]
+    Validar -->|No| Corregir[Mostrar Errores]
+    Corregir --> Formulario[Reintentar]
+    Formulario --> Validar
+    Procesar --> Guardar[(Base de Datos SQLite)]
+    Guardar --> Fin([Operación Completada])`,
+
+  brainstorm: `flowchart TD
+    %% Lluvia de Ideas / Brainstorming (Mapa de Clústeres)
+    Reto(["💡 <b>RETO O PREGUNTA CENTRAL</b><br/><i>¿Cómo podemos impulsar nuestro proyecto al siguiente nivel?</i>"]):::centro
+
+    %% Clústeres de Ideación
+    Reto --- C1["⚡ <b>Quick Wins</b><br/>(Bajo esfuerzo, alto impacto)"]:::quick
+    Reto --- C2["🚀 <b>Ideas Disruptivas</b><br/>(Innovación y diferenciación)"]:::disruptiva
+    Reto --- C3["🎨 <b>Experiencia de Usuario</b><br/>(Diseño, empatía y valor)"]:::ux
+    Reto --- C4["⚙️ <b>Eficacia y Tecnología</b><br/>(Escalabilidad y arquitectura)"]:::tecnica
+
+    %% Ideas Generadas por Clúster
+    C1 --- I1["• Automatizar tareas repetitivas<br/>• Plantillas preconstruidas listas<br/>• Atajos de teclado intuitivos"]:::idea
+    C2 --- I2["• Asistente proactivo con Inteligencia Artificial<br/>• Sinapsis visual y conexiones automáticas<br/>• Espacios colaborativos en tiempo real"]:::idea
+    C3 --- I3["• Modo zen ultra limpio sin distracciones<br/>• Búsqueda difusa ultrarrápida<br/>• Notificaciones amigables no invasivas"]:::idea
+    C4 --- I4["• Base de datos local ultraligera<br/>• Cifrado robusto de extremo a extremo<br/>• Sincronización instantánea offline"]:::idea
+
+    %% Estilos Visuales del Brainstorming
+    classDef centro fill:#f59e0b25,stroke:#f59e0b,stroke-width:2.5px,color:#fff,font-weight:bold;
+    classDef quick fill:#10b98125,stroke:#10b981,stroke-width:2px,color:#fff,font-weight:bold;
+    classDef disruptiva fill:#8b5cf625,stroke:#8b5cf6,stroke-width:2px,color:#fff,font-weight:bold;
+    classDef ux fill:#ec489925,stroke:#ec4899,stroke-width:2px,color:#fff,font-weight:bold;
+    classDef tecnica fill:#0ea5e925,stroke:#0ea5e9,stroke-width:2px,color:#fff,font-weight:bold;
+    classDef idea fill:#1e293b,stroke:#475569,stroke-width:1px,color:#f1f5f9;
+
+    class Reto centro;
+    class C1 quick;
+    class C2 disruptiva;
+    class C3 ux;
+    class C4 tecnica;
+    class I1,I2,I3,I4 idea;`,
+
+  synoptic: `flowchart LR
+    %% Cuadro Sinóptico (Esquema de Llaves)
+    Tema["<b>Idea General</b><br/>(Tema Principal)"]
+
+    %% Ideas Principales
+    Tema --- P1["<b>Idea Principal 1</b>"]
+    Tema --- P2["<b>Idea Principal 2</b>"]
+    Tema --- P3["<b>Idea Principal 3</b>"]
+
+    %% Ideas Secundarias y Conceptos (Sub-llaves)
+    P1 --- S1_1["Idea Secundaria 1.1"]
+    P1 --- S1_2["Idea Secundaria 1.2"]
+    S1_1 --- D1_1["• Concepto clave A<br/>• Ejemplo representativo"]
+    S1_2 --- D1_2["• Concepto clave B"]
+
+    P2 --- S2_1["Idea Secundaria 2.1"]
+    P2 --- S2_2["Idea Secundaria 2.2"]
+    S2_1 --- D2_1["• Concepto clave C"]
+    S2_2 --- D2_2["• Concepto clave D"]
+
+    P3 --- S3_1["Idea Secundaria 3.1"]
+    S3_1 --- D3_1["• Concepto clave E"]
+
+    %% Estilos de Cuadro Sinóptico
+    classDef tema fill:#0284c7,stroke:#38bdf8,stroke-width:2px,color:#ffffff,font-weight:bold;
+    classDef principal fill:#4f46e5,stroke:#818cf8,stroke-width:2px,color:#ffffff,font-weight:bold;
+    classDef secundaria fill:#1e293b,stroke:#0ea5e9,stroke-width:1.5px,color:#f8fafc;
+    classDef detalle fill:#0f172a,stroke:#475569,stroke-width:1px,color:#cbd5e1;
+
+    class Tema tema;
+    class P1,P2,P3 principal;
+    class S1_1,S1_2,S2_1,S2_2,S3_1 secundaria;
+    class D1_1,D1_2,D2_1,D2_2,D3_1 detalle;`,
+
+  foda: `flowchart TB
+    %% ==========================================
+    %% MATRIZ FODA ESTRATÉGICA - PLANO CARTESIANO 2X2
+    %% ==========================================
+    subgraph PLANO["<b>🎯 MATRIZ FODA: PLANO CARTESIANO DE DECISIÓN ESTRATÉGICA</b>"]
+        direction TB
+
+        %% Indicador Superior del Eje Y
+        EJE_Y_POS["<b>▲ (+Y) FACTORES FAVORABLES / POSITIVOS (CRECIMIENTO)</b>"]:::ejeYPos
+
+        subgraph FILA_SUPERIOR[" "]
+            direction LR
+
+            %% Cuadrante I: Interno + Positivo (Fortalezas)
+            subgraph C_FO["<b>💪 CUADRANTE I: FORTALEZAS (INTERNAS)</b>"]
+                direction TB
+                F1["⭐ <b>Ventaja Competitiva Única:</b><br/>Tecnología propietaria y propiedad intelectual.<br/>🏷️ <i>[Tecnología] • Impacto: Alto</i>"]:::itemF
+                F2["⭐ <b>Talento & Cultura:</b><br/>Equipo senior altamente capacitado y ágil.<br/>🏷️ <i>[Equipo] • Impacto: Alto</i>"]:::itemF
+                F3["⭐ <b>Eficiencia Operativa:</b><br/>Costos de infraestructura mínimos y optimizados.<br/>🏷️ <i>[Finanzas] • Impacto: Medio</i>"]:::itemF
+                F_ESTRATEGIA["🚀 <b>Estrategia FO (Maxi-Maxi):</b><br/><i>Acelerar expansión usando ventajas propias.</i>"]:::badgeFO
+            end
+
+            %% Cuadrante II: Externo + Positivo (Oportunidades)
+            subgraph C_OP["<b>🚀 CUADRANTE II: OPORTUNIDADES (EXTERNAS)</b>"]
+                direction TB
+                O1["⭐ <b>Demanda Insatisfecha:</b><br/>Crecimiento anual del 35% en el mercado objetivo.<br/>🏷️ <i>[Mercado] • Potencial: Máximo</i>"]:::itemO
+                O2["⭐ <b>Alianzas Estratégicas:</b><br/>Posibilidad de sinergias con líderes de industria.<br/>🏷️ <i>[Alianzas] • Potencial: Alto</i>"]:::itemO
+                O3["⭐ <b>Adopción Tecnológica:</b><br/>Transición masiva de clientes a soluciones modernas.<br/>🏷️ <i>[Tendencia] • Potencial: Alto</i>"]:::itemO
+                O_ESTRATEGIA["💡 <b>Estrategia DO (Mini-Maxi):</b><br/><i>Superar brechas para capturar nuevas olas.</i>"]:::badgeDO
+            end
+        end
+
+        %% Intersección de Ejes Cartesianos (Eje X: Interno vs Externo)
+        EJE_X_DIV["<b>◀ (-X) FACTORES INTERNOS  ◄───  [ 🎯 ORIGEN (0,0) ]  ───►  FACTORES EXTERNOS (+X) ▶</b>"]:::ejeX
+
+        subgraph FILA_INFERIOR[" "]
+            direction LR
+
+            %% Cuadrante III: Interno + Negativo (Debilidades)
+            subgraph C_DE["<b>⚠️ CUADRANTE III: DEBILIDADES (INTERNAS)</b>"]
+                direction TB
+                D1["⚡ <b>Presupuesto Limitado:</b><br/>Flujo de caja ajustado para marketing masivo.<br/>🏷️ <i>[Capital] • Prioridad: Urgente</i>"]:::itemD
+                D2["⚡ <b>Poca Presencia de Marca:</b><br/>Reconocimiento incipiente frente a incumbentes.<br/>🏷️ <i>[Branding] • Prioridad: Alta</i>"]:::itemD
+                D3["⚡ <b>Procesos No Estandarizados:</b><br/>Dependencia de conocimiento tácito de fundadores.<br/>🏷️ <i>[Operaciones] • Prioridad: Media</i>"]:::itemD
+                D_ESTRATEGIA["🛡️ <b>Estrategia FA (Maxi-Mini):</b><br/><i>Blindarse con fortalezas ante vientos en contra.</i>"]:::badgeFA
+            end
+
+            %% Cuadrante IV: Externo + Negativo (Amenazas)
+            subgraph C_AM["<b>🛡️ CUADRANTE IV: AMENAZAS (EXTERNAS)</b>"]
+                direction TB
+                A1["⚡ <b>Competencia Agresiva:</b><br/>Entrada de gigantes tecnológicos con precios cero.<br/>🏷️ <i>[Riesgo] • Severidad: Crítica</i>"]:::itemA
+                A2["⚡ <b>Volatilidad Regulatoria:</b><br/>Nuevas normativas de privacidad y cumplimiento.<br/>🏷️ <i>[Legal] • Severidad: Alta</i>"]:::itemA
+                A3["⚡ <b>Incertidumbre Macroeconómica:</b><br/>Contracción de inversión en software empresarial.<br/>🏷️ <i>[Economía] • Severidad: Media</i>"]:::itemA
+                A_ESTRATEGIA["⚠️ <b>Estrategia DA (Mini-Mini):</b><br/><i>Plan de contingencia y reducción de flancos débiles.</i>"]:::badgeDA
+            end
+        end
+
+        %% Indicador Inferior del Eje Y
+        EJE_Y_NEG["<b>▼ (-Y) FACTORES DESFAVORABLES / NEGATIVOS (RIESGOS)</b>"]:::ejeYNeg
+    end
+
+    EJE_Y_POS ~~~ FILA_SUPERIOR ~~~ EJE_X_DIV ~~~ FILA_INFERIOR ~~~ EJE_Y_NEG
+
+    %% ==========================================
+    %% ESTILOS VISUALES Y PALETA CROMÁTICA
+    %% ==========================================
+    classDef ejeYPos fill:#064e3b33,stroke:#10b981,stroke-width:2px,color:#a7f3d0,font-weight:bold;
+    classDef ejeYNeg fill:#7f1d1d33,stroke:#ef4444,stroke-width:2px,color:#fecaca,font-weight:bold;
+    classDef ejeX fill:#0f172a,stroke:#38bdf8,stroke-width:2px,color:#e0f2fe,font-weight:bold;
+
+    %% Cuadrantes y Tarjetas
+    classDef itemF fill:#022c22,stroke:#10b981,stroke-width:1.5px,color:#ecfdf5;
+    classDef itemO fill:#083344,stroke:#06b6d4,stroke-width:1.5px,color:#ecfeff;
+    classDef itemD fill:#451a03,stroke:#f59e0b,stroke-width:1.5px,color:#fffbeb;
+    classDef itemA fill:#4c0519,stroke:#f43f5e,stroke-width:1.5px,color:#fff1f2;
+
+    %% Insignias Estratégicas (Fórmula de Acción)
+    classDef badgeFO fill:#065f46,stroke:#34d399,stroke-width:2px,color:#ffffff,font-weight:bold;
+    classDef badgeDO fill:#155e75,stroke:#22d3ee,stroke-width:2px,color:#ffffff,font-weight:bold;
+    classDef badgeFA fill:#92400e,stroke:#fbbf24,stroke-width:2px,color:#ffffff,font-weight:bold;
+    classDef badgeDA fill:#9f1239,stroke:#fb7185,stroke-width:2px,color:#ffffff,font-weight:bold;
+
+    class F1,F2,F3 itemF;
+    class O1,O2,O3 itemO;
+    class D1,D2,D3 itemD;
+    class A1,A2,A3,A4 itemA;
+    class F_ESTRATEGIA badgeFO;
+    class O_ESTRATEGIA badgeDO;
+    class D_ESTRATEGIA badgeFA;
+    class A_ESTRATEGIA badgeDA;`,
+
+  comparison: `flowchart TB
+    %% Cuadro Comparativo de Alto Rendimiento
+    subgraph HEADER["<b>⚖️ MATRIZ DE COMPARACIÓN TÉCNICA Y ESTRATÉGICA</b>"]
+        direction TB
+
+        subgraph COL_A["<b>🔵 OPCIÓN A: KORTEXA (Local-First)</b>"]
+            direction TB
+            A_RESUMEN["<b>Enfoque:</b> Privacidad y Segundo Cerebro Autónomo<br/><b>Evaluación:</b> ⭐⭐⭐⭐⭐ (Excelente)"]:::badgeA
+            A1["🏛️ <b>Arquitectura & Datos:</b><br/>Markdown (.md) estándar + Base SQLite local<br/><i>Sin formatos cerrados ni ataduras</i><br/>✅ <b>Control Absoluto</b>"]:::optA
+            A2["🔒 <b>Privacidad & Seguridad:</b><br/>Cifrado PBKDF2 local + Bóvedas aisladas<br/><i>Tus datos nunca salen de tu máquina</i><br/>✅ <b>100% Privado</b>"]:::optA
+            A3["⚡ <b>Rendimiento & Latencia:</b><br/>Respuesta en milisegundos (latencia 0)<br/><i>Opera perfectamente 100% sin conexión</i><br/>✅ <b>Offline Nativo</b>"]:::optA
+            A4["💰 <b>Modelo de Costos:</b><br/>Auto-alojado, código abierto y libre<br/><i>Sin cuotas mensuales ni cobro por usuario</i><br/>✅ <b>Costo Cero</b>"]:::optA
+            A5["🎯 <b>Caso de Uso Ideal:</b><br/>Investigadores, desarrolladores y personas<br/>que valoran privacidad total y rapidez"]:::optA
+        end
+
+        subgraph COL_B["<b>🟣 OPCIÓN B: NOTION / SAAS (Nube Propietaria)</b>"]
+            direction TB
+            B_RESUMEN["<b>Enfoque:</b> Colaboración Centralizada en la Nube<br/><b>Evaluación:</b> ⭐⭐⭐⭐☆ (Bueno)"]:::badgeB
+            B1["🏛️ <b>Arquitectura & Datos:</b><br/>Base de datos propietaria en servidores remotos<br/><i>Exportación compleja / Vendor Lock-in</i><br/>⚠️ <b>Formato Propietario</b>"]:::optB
+            B2["🔒 <b>Privacidad & Seguridad:</b><br/>Almacenado en la nube corporativa de terceros<br/><i>Sujeto a políticas y accesos de terceros</i><br/>⚠️ <b>Privacidad Compartida</b>"]:::optB
+            B3["⚡ <b>Rendimiento & Latencia:</b><br/>Carga variable según conexión y servidores<br/><i>Inutilizable si se cae internet o el servicio</i><br/>⚠️ <b>Requiere Conexión</b>"]:::optB
+            B4["💰 <b>Modelo de Costos:</b><br/>Suscripción periódica recurrente ($10-$20/mes)<br/><i>Escala de costo con cada nuevo usuario</i><br/>⚠️ <b>Pago Recurrente</b>"]:::optB
+            B5["🎯 <b>Caso de Uso Ideal:</b><br/>Equipos corporativos remotos que necesitan<br/>comentarios y edición simultánea masiva"]:::optB
+        end
+    end
+
+    COL_A ~~~ COL_B
+
+    %% Estilos de Alto Impacto Visual
+    classDef badgeA fill:#0369a1,stroke:#38bdf8,stroke-width:2px,color:#ffffff,font-weight:bold;
+    classDef badgeB fill:#6b21a8,stroke:#c084fc,stroke-width:2px,color:#ffffff,font-weight:bold;
+    classDef optA fill:#082f49,stroke:#0ea5e9,stroke-width:1.5px,color:#f0f9ff;
+    classDef optB fill:#2e1065,stroke:#a855f7,stroke-width:1.5px,color:#faf5ff;
+
+    class A_RESUMEN badgeA;
+    class B_RESUMEN badgeB;
+    class A1,A2,A3,A4,A5 optA;
+    class B1,B2,B3,B4,B5 optB;`,
+
+  er: `erDiagram
+    USUARIO ||--o{ BOVEDA : posee
+    USUARIO ||--o{ NOTA : crea
+    BOVEDA ||--o{ NOTA : contiene
+    NOTA ||--o{ ETIQUETA : categoriza
+
+    USUARIO {
+        int id PK
+        string username
+        string email
+        string password_hash
+    }
+    BOVEDA {
+        int id PK
+        int user_id FK
+        string nombre
+        boolean encrypted
+    }
+    NOTA {
+        int id PK
+        int boveda_id FK
+        string titulo
+        text contenido
+        datetime updated_at
+    }`,
+
+  class: `classDiagram
+    class CerebroKortexa {
+        +String usuario
+        +List~Boveda~ bovedas
+        +crearNota(titulo, contenido)
+        +buscarSinapsis(query)
+    }
+    class Boveda {
+        +String nombre
+        +Boolean cifrada
+        +bloquear()
+        +desbloquear(password)
+    }
+    class Nota {
+        +String titulo
+        +String contenido
+        +List~String~ wikilinks
+        +renderizarGrafo()
+    }
+    CerebroKortexa "1" *-- "many" Boveda
+    Boveda "1" *-- "many" Nota`,
+
+  sequence: `sequenceDiagram
+    autonumber
+    actor Usuario
+    participant Frontend as Kortexa Web
+    participant Server as Servidor Node
+    participant DB as SQLite DB
+
+    Usuario->>Frontend: Ingresa credenciales (user, pass)
+    Frontend->>Server: POST /api/auth/login
+    Server->>DB: Consulta usuario y verification hash
+    DB-->>Server: Retorna registro
+    Server->>Server: Valida contraseña con PBKDF2
+    Server-->>Frontend: Token de Sesión (Cookie segura)
+    Frontend-->>Usuario: Redirige a Bóvedas Privadas`,
+
+  state: `stateDiagram-v2
+    [*] --> Bloqueada
+    Bloqueada --> Verificando : Ingresa Contraseña Maestra
+    Verificando --> Desbloqueada : Contraseña Válida
+    Verificando --> Bloqueada : Contraseña Incorrecta
+    Desbloqueada --> Editando : Selecciona Nota
+    Editando --> Guardando : Modifica Contenido
+    Guardando --> Desbloqueada : Auto-guardado OK (600ms)
+    Desbloqueada --> Bloqueada : Bloquear Bóveda (Ctrl+L)`,
+
+  mindmap: `mindmap
+  root((Segundo Cerebro))
+    Capturar
+      Pensamientos Rápidos
+      Notas de Voz
+      Imágenes y Tablas
+    Organizar
+      Bóvedas Aisladas
+      Carpetas Jerárquicas
+      Búsqueda Rápida
+    Conectar
+      Wikilinks Sinápticos
+      Red Neuronal 2D
+      Grafo de Conocimiento
+    Sintetizar
+      Diagramas UML y ER
+      Ecuaciones KaTeX
+      Hojas de Cálculo`,
+
+  gantt: `gantt
+    title Cronograma de Implementación Kortexa
+    dateFormat YYYY-MM-DD
+    section Backend
+        Sistema Auth SQLite       :done,    2026-11-01, 2026-11-04
+        HTTPS & Certificados SSL   :done,    2026-11-05, 2026-11-07
+        Aislamiento de Bóvedas    :done,    2026-11-08, 2026-11-09
+    section Frontend
+        Selects Personalizados    :done,    2026-11-09, 2026-11-09
+        Ecuaciones KaTeX          :done,    2026-11-09, 2026-11-09
+        Diagramas Mermaid         :active,  2026-11-09, 2026-11-10`
+};
+
+let currentDiagramType = 'flowchart';
+let diagramPreviewDebounceTimer = null;
+
+async function renderMermaidDiagramsInPreview() {
+  const containers = markdownPreviewEl?.querySelectorAll('.mermaid');
+  if (!containers || containers.length === 0 || !window.mermaid) return;
+
+  const isDark = (document.documentElement.getAttribute('data-resolved-theme') || 'dark') === 'dark';
+  try {
+    window.mermaid.initialize({
+      startOnLoad: false,
+      theme: isDark ? 'dark' : 'default',
+      securityLevel: 'loose',
+      fontFamily: 'Plus Jakarta Sans, sans-serif'
+    });
+  } catch (e) {}
+
+  for (let i = 0; i < containers.length; i++) {
+    const el = containers[i];
+    if (el.getAttribute('data-processed') === 'true') continue;
+    const rawCode = el.getAttribute('data-code') ? decodeURIComponent(el.getAttribute('data-code')) : el.textContent;
+    const uniqueId = `mermaid-render-${Date.now()}-${i}`;
+    try {
+      const { svg } = await window.mermaid.render(uniqueId, rawCode);
+      el.innerHTML = svg;
+      el.setAttribute('data-processed', 'true');
+
+      const wrapper = el.closest('.mermaid-wrapper');
+      if (wrapper && !wrapper.dataset.controlsBound) {
+        wrapper.dataset.controlsBound = 'true';
+        setupDiagramInlineControls(wrapper, el);
+      }
+    } catch (err) {
+      console.warn('Error renderizando diagrama Mermaid:', err);
+      el.innerHTML = `<div class="mermaid-error-box">⚠️ Error en la sintaxis del diagrama:\n${escapeHtml(err.message || String(err))}</div>`;
+      el.setAttribute('data-processed', 'true');
+    }
+  }
+}
+
+function openDiagramModal(initialCode = '') {
+  const modal = document.getElementById('diagram-modal');
+  const input = document.getElementById('diagram-code-input');
+  if (!modal || !input) return;
+
+  let cleaned = (initialCode || '').trim();
+  if (cleaned.startsWith('```mermaid')) {
+    cleaned = cleaned.replace(/^```mermaid\s*/i, '').replace(/```$/i, '').trim();
+  }
+
+  if (cleaned) {
+    input.value = cleaned;
+    if (/brainstorm|lluvia\s*de\s*ideas/i.test(cleaned)) currentDiagramType = 'brainstorm';
+    else if (/cuadro\s*sin[oó]ptico/i.test(cleaned)) currentDiagramType = 'synoptic';
+    else if (/foda|dafo|swot/i.test(cleaned)) currentDiagramType = 'foda';
+    else if (/comparati|comparativo/i.test(cleaned)) currentDiagramType = 'comparison';
+    else if (cleaned.startsWith('erDiagram')) currentDiagramType = 'er';
+    else if (cleaned.startsWith('classDiagram')) currentDiagramType = 'class';
+    else if (cleaned.startsWith('sequenceDiagram')) currentDiagramType = 'sequence';
+    else if (cleaned.startsWith('stateDiagram')) currentDiagramType = 'state';
+    else if (cleaned.startsWith('mindmap')) currentDiagramType = 'mindmap';
+    else if (cleaned.startsWith('gantt')) currentDiagramType = 'gantt';
+    else currentDiagramType = 'flowchart';
+  } else {
+    currentDiagramType = 'flowchart';
+    input.value = DIAGRAM_TEMPLATES.flowchart;
+  }
+
+  updateDiagramTypePills();
+  scheduleDiagramPreviewUpdate(true);
+
+  modal.classList.add('active');
+  modal.setAttribute('aria-hidden', 'false');
+  setTimeout(() => input.focus(), 60);
+}
+
+function closeDiagramModal() {
+  const modal = document.getElementById('diagram-modal');
+  if (modal) {
+    modal.classList.remove('active');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+  markdownInputEl?.focus();
+}
+
+function updateDiagramTypePills() {
+  document.querySelectorAll('#diagram-types-nav .diagram-type-pill').forEach(pill => {
+    pill.classList.toggle('active', pill.getAttribute('data-type') === currentDiagramType);
+  });
+}
+
+function scheduleDiagramPreviewUpdate(immediate = false) {
+  clearTimeout(diagramPreviewDebounceTimer);
+  if (immediate) {
+    updateDiagramLivePreview();
+  } else {
+    diagramPreviewDebounceTimer = setTimeout(updateDiagramLivePreview, 350);
+  }
+}
+
+async function updateDiagramLivePreview() {
+  const input = document.getElementById('diagram-code-input');
+  const preview = document.getElementById('diagram-live-preview');
+  if (!input || !preview) return;
+
+  const code = input.value.trim();
+  if (!code) {
+    preview.innerHTML = '<span class="diagram-preview-placeholder">Escribe código Mermaid para ver el diagrama...</span>';
+    return;
+  }
+
+  if (window.mermaid) {
+    const isDark = (document.documentElement.getAttribute('data-resolved-theme') || 'dark') === 'dark';
+    try {
+      window.mermaid.initialize({
+        startOnLoad: false,
+        theme: isDark ? 'dark' : 'default',
+        securityLevel: 'loose',
+        fontFamily: 'Plus Jakarta Sans, sans-serif'
+      });
+      const uniqueId = `mermaid-modal-preview-${Date.now()}`;
+      const { svg } = await window.mermaid.render(uniqueId, code);
+      preview.innerHTML = svg;
+    } catch (err) {
+      preview.innerHTML = `<div class="mermaid-error-box">⚠️ Sintaxis incompleta o error:\n${escapeHtml(err.message || String(err))}</div>`;
+    }
+  } else {
+    preview.innerHTML = `<pre><code>${escapeHtml(code)}</code></pre>`;
+  }
+}
+
+function insertDiagramIntoEditor() {
+  const input = document.getElementById('diagram-code-input');
+  if (!input || !markdownInputEl) return;
+
+  const code = input.value.trim();
+  if (!code) {
+    closeDiagramModal();
+    return;
+  }
+
+  const snippet = `\n\`\`\`mermaid\n${code}\n\`\`\`\n`;
+
+  const textarea = markdownInputEl;
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const fullText = textarea.value;
+
+  textarea.value = fullText.substring(0, start) + snippet + fullText.substring(end);
+  const newPos = start + snippet.length;
+  textarea.setSelectionRange(newPos, newPos);
+  textarea.focus();
+
+  closeDiagramModal();
+  renderMarkdown();
+  scheduleSave();
+}
+
+function setupDiagramEventListeners() {
+  const input = document.getElementById('diagram-code-input');
+  const btnClose = document.getElementById('btn-close-diagram-modal');
+  const btnInsert = document.getElementById('btn-insert-diagram');
+  const modal = document.getElementById('diagram-modal');
+
+  document.querySelectorAll('#diagram-types-nav .diagram-type-pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+      const type = pill.getAttribute('data-type');
+      if (type && DIAGRAM_TEMPLATES[type]) {
+        currentDiagramType = type;
+        updateDiagramTypePills();
+        if (input) {
+          input.value = DIAGRAM_TEMPLATES[type];
+          scheduleDiagramPreviewUpdate(true);
+        }
+      }
+    });
+  });
+
+  input?.addEventListener('input', () => scheduleDiagramPreviewUpdate(false));
+
+  btnClose?.addEventListener('click', closeDiagramModal);
+  btnInsert?.addEventListener('click', insertDiagramIntoEditor);
+
+  modal?.addEventListener('click', (e) => {
+    if (e.target === modal) closeDiagramModal();
+  });
+
+  input?.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      insertDiagramIntoEditor();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeDiagramModal();
+    }
+  });
+}
+
+function setupDiagramInlineControls(wrapper, diagramEl) {
+  let scale = 1.0;
+  const viewport = wrapper.querySelector('.mermaid-viewport');
+
+  const btnZoomIn = wrapper.querySelector('.btn-diagram-zoom-in');
+  const btnZoomOut = wrapper.querySelector('.btn-diagram-zoom-out');
+  const btnReset = wrapper.querySelector('.btn-diagram-zoom-reset');
+  const btnFullscreen = wrapper.querySelector('.btn-diagram-fullscreen');
+
+  function applyZoom(newScale) {
+    scale = Math.max(0.3, Math.min(3.0, newScale));
+    if (viewport) {
+      viewport.style.transform = scale === 1.0 ? '' : `scale(${scale})`;
+    }
+  }
+
+  btnZoomIn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    applyZoom(scale + 0.2);
+  });
+
+  btnZoomOut?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    applyZoom(scale - 0.2);
+  });
+
+  btnReset?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    applyZoom(1.0);
+  });
+
+  btnFullscreen?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const svgEl = diagramEl.querySelector('svg');
+    if (svgEl) {
+      openDiagramFullscreenModal(svgEl.outerHTML);
+    }
+  });
+
+  diagramEl?.addEventListener('dblclick', (e) => {
+    e.stopPropagation();
+    const svgEl = diagramEl.querySelector('svg');
+    if (svgEl) {
+      openDiagramFullscreenModal(svgEl.outerHTML);
+    }
+  });
+}
+
+// ==========================================
+// VISOR DE DIAGRAMAS EN PANTALLA COMPLETA (PAN & ZOOM)
+// ==========================================
+let fsDiagramState = {
+  scale: 1.0,
+  panX: 0,
+  panY: 0,
+  isDragging: false,
+  startX: 0,
+  startY: 0
+};
+
+function openDiagramFullscreenModal(svgHtml) {
+  const modal = document.getElementById('diagram-fullscreen-modal');
+  const content = document.getElementById('diagram-fullscreen-content');
+  if (!modal || !content) return;
+
+  content.innerHTML = svgHtml;
+  fsDiagramState = {
+    scale: 1.0,
+    panX: 0,
+    panY: 0,
+    isDragging: false,
+    startX: 0,
+    startY: 0
+  };
+
+  updateFullscreenDiagramTransform();
+
+  modal.classList.add('active');
+  modal.setAttribute('aria-hidden', 'false');
+}
+
+function closeDiagramFullscreenModal() {
+  const modal = document.getElementById('diagram-fullscreen-modal');
+  const content = document.getElementById('diagram-fullscreen-content');
+  if (modal) {
+    modal.classList.remove('active');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+  if (content) {
+    content.innerHTML = '';
+  }
+}
+
+function updateFullscreenDiagramTransform() {
+  const content = document.getElementById('diagram-fullscreen-content');
+  const zoomLevelEl = document.getElementById('diagram-fs-zoom-level');
+  if (!content) return;
+
+  content.style.transform = `translate(${fsDiagramState.panX}px, ${fsDiagramState.panY}px) scale(${fsDiagramState.scale})`;
+  if (zoomLevelEl) {
+    zoomLevelEl.textContent = `${Math.round(fsDiagramState.scale * 100)}%`;
+  }
+}
+
+function setupDiagramFullscreenEventListeners() {
+  const canvas = document.getElementById('diagram-fullscreen-canvas');
+  const modal = document.getElementById('diagram-fullscreen-modal');
+  const btnClose = document.getElementById('btn-fs-diagram-close');
+  const btnZoomIn = document.getElementById('btn-fs-diagram-zoom-in');
+  const btnZoomOut = document.getElementById('btn-fs-diagram-zoom-out');
+  const btnReset = document.getElementById('btn-fs-diagram-reset');
+
+  if (!canvas || !modal) return;
+
+  btnClose?.addEventListener('click', closeDiagramFullscreenModal);
+
+  // Zoom con botones
+  btnZoomIn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fsDiagramState.scale = Math.min(5.0, fsDiagramState.scale * 1.25);
+    updateFullscreenDiagramTransform();
+  });
+
+  btnZoomOut?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fsDiagramState.scale = Math.max(0.2, fsDiagramState.scale / 1.25);
+    updateFullscreenDiagramTransform();
+  });
+
+  btnReset?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fsDiagramState.scale = 1.0;
+    fsDiagramState.panX = 0;
+    fsDiagramState.panY = 0;
+    updateFullscreenDiagramTransform();
+  });
+
+  // Zoom interactivo con la rueda del ratón
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
+    const newScale = Math.max(0.2, Math.min(5.0, fsDiagramState.scale * zoomFactor));
+
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left - (rect.width / 2);
+    const mouseY = e.clientY - rect.top - (rect.height / 2);
+
+    fsDiagramState.panX -= (mouseX - fsDiagramState.panX) * (zoomFactor - 1);
+    fsDiagramState.panY -= (mouseY - fsDiagramState.panY) * (zoomFactor - 1);
+    fsDiagramState.scale = newScale;
+
+    updateFullscreenDiagramTransform();
+  }, { passive: false });
+
+  // Pan y Arrastre con el ratón
+  canvas.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    fsDiagramState.isDragging = true;
+    fsDiagramState.startX = e.clientX - fsDiagramState.panX;
+    fsDiagramState.startY = e.clientY - fsDiagramState.panY;
+    canvas.classList.add('grabbing');
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!fsDiagramState.isDragging) return;
+    fsDiagramState.panX = e.clientX - fsDiagramState.startX;
+    fsDiagramState.panY = e.clientY - fsDiagramState.startY;
+    updateFullscreenDiagramTransform();
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (fsDiagramState.isDragging) {
+      fsDiagramState.isDragging = false;
+      canvas.classList.remove('grabbing');
+    }
+  });
+
+  // Salir con tecla Escape
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.classList.contains('active')) {
+      closeDiagramFullscreenModal();
+    }
+  });
 }
 
 // Iniciar aplicación

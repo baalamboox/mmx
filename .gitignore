@@ -1,2 +1,9 @@
 node_modules
-memong
+vaults
+*.db
+*.sqlite
+*.sqlite3
+certs
+*.pem
+*.key
+*.crt
