@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kortexa — Documento Compartido</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="alternate icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Markdown & Herramientas -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+
+  <style>
+    :root {
+      --bg-base: #0c0e14;
+      --bg-surface: #131722;
+      --bg-card: #181d2c;
+      --bg-elevated: #20263a;
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-highlight: rgba(99, 102, 241, 0.3);
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --text-faint: #64748b;
+      --indigo-accent: #6366f1;
+      --indigo-glow: rgba(99, 102, 241, 0.25);
+      --pink-core: #ec4899;
+      --success: #10b981;
+      --danger: #ef4444;
+      --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    [data-theme="light"] {
+      --bg-base: #f8fafc;
+      --bg-surface: #ffffff;
+      --bg-card: #ffffff;
+      --bg-elevated: #f1f5f9;
+      --border-subtle: #e2e8f0;
+      --border-highlight: rgba(99, 102, 241, 0.35);
+      --text-main: #0f172a;
+      --text-muted: #475569;
+      --text-faint: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg-base);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      line-height: 1.6;
+    }
+
+    header.viewer-header {
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      backdrop-filter: blur(12px);
+    }
+
+    .brand-section {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: inherit;
+    }
+
+    .brand-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      background: linear-gradient(135deg, var(--indigo-accent), var(--pink-core));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+    }
+
+    .brand-meta h1 {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .public-badge {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      padding: 2px 7px;
+      border-radius: 12px;
+      background: rgba(99, 102, 241, 0.15);
+      color: #818cf8;
+      border: 1px solid rgba(99, 102, 241, 0.3);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .viewer-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 13px;
+      border-radius: 8px;
+      font-size: 12.5px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-elevated);
+      color: var(--text-main);
+      transition: all 0.18s ease;
+      text-decoration: none;
+    }
+    .viewer-btn:hover {
+      border-color: var(--indigo-accent);
+      transform: translateY(-1px);
+    }
+    .viewer-btn.primary {
+      background: linear-gradient(135deg, var(--indigo-accent), #4f46e5);
+      color: #ffffff;
+      border-color: transparent;
+      box-shadow: 0 2px 8px var(--indigo-glow);
+    }
+
+    main.viewer-container {
+      max-width: 900px;
+      width: 100%;
+      margin: 32px auto;
+      padding: 0 20px 60px;
+      flex: 1;
+    }
+
+    /* Layout para Colecciones / Carpetas / Bóvedas */
+    .viewer-collection-layout {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 24px;
+      max-width: 1280px;
+      width: 100%;
+      margin: 24px auto;
+      padding: 0 20px 60px;
+      flex: 1;
+    }
+    @media (max-width: 860px) {
+      .viewer-collection-layout {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .collection-sidebar {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      padding: 18px;
+      height: fit-content;
+      max-height: calc(100vh - 120px);
+      position: sticky;
+      top: 80px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .collection-meta-head {
+      margin-bottom: 14px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .collection-title {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .collection-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .collection-search {
+      width: 100%;
+      padding: 8px 12px;
+      background: var(--bg-base);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      color: var(--text-main);
+      font-family: inherit;
+      font-size: 12.5px;
+      outline: none;
+      margin-bottom: 12px;
+    }
+    .collection-search:focus {
+      border-color: var(--indigo-accent);
+    }
+
+    .collection-files-list {
+      list-style: none;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .collection-file-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border-radius: 7px;
+      cursor: pointer;
+      font-size: 12.5px;
+      color: var(--text-muted);
+      transition: all 0.15s ease;
+      user-select: none;
+    }
+    .collection-file-item:hover {
+      background: var(--bg-elevated);
+      color: var(--text-main);
+    }
+    .collection-file-item.active {
+      background: rgba(99, 102, 241, 0.18);
+      color: #818cf8;
+      font-weight: 600;
+      border-left: 2px solid #818cf8;
+    }
+    .collection-file-name {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 1;
+    }
+
+    .doc-meta-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      padding: 24px 28px;
+      margin-bottom: 24px;
+    }
+
+    .doc-title {
+      font-size: 26px;
+      font-weight: 800;
+      margin-bottom: 12px;
+      color: var(--text-main);
+      line-height: 1.3;
+    }
+
+    .doc-info-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 16px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .doc-author {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+    .author-avatar {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--indigo-accent);
+      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+    }
+
+    .content-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      padding: 32px 36px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.15);
+    }
+
+    /* Estilos del Render Markdown */
+    .markdown-body {
+      font-size: 15px;
+      line-height: 1.75;
+      color: var(--text-main);
+    }
+    .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
+      margin-top: 28px;
+      margin-bottom: 14px;
+      font-weight: 700;
+      color: var(--text-main);
+      line-height: 1.3;
+    }
+    .markdown-body h1 { font-size: 24px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 8px; }
+    .markdown-body h2 { font-size: 20px; }
+    .markdown-body h3 { font-size: 16px; }
+    .markdown-body p { margin-bottom: 16px; }
+    .markdown-body ul, .markdown-body ol { margin-bottom: 16px; padding-left: 24px; }
+    .markdown-body li { margin-bottom: 6px; }
+    .markdown-body blockquote {
+      border-left: 3px solid var(--indigo-accent);
+      padding: 8px 16px;
+      margin: 16px 0;
+      color: var(--text-muted);
+      background: rgba(99, 102, 241, 0.05);
+      border-radius: 0 8px 8px 0;
+    }
+    .markdown-body code {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      background: var(--bg-elevated);
+      padding: 2px 6px;
+      border-radius: 5px;
+      border: 1px solid var(--border-subtle);
+    }
+    .markdown-body pre {
+      background: var(--bg-base);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 16px;
+      overflow-x: auto;
+      margin: 18px 0;
+    }
+    .markdown-body pre code {
+      background: transparent;
+      padding: 0;
+      border: none;
+    }
+    .markdown-body table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 20px 0;
+    }
+    .markdown-body th, .markdown-body td {
+      border: 1px solid var(--border-subtle);
+      padding: 10px 14px;
+      text-align: left;
+    }
+    .markdown-body th {
+      background: var(--bg-elevated);
+      font-weight: 600;
+    }
+    .markdown-body a {
+      color: #818cf8;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+    .markdown-body img {
+      max-width: 100%;
+      border-radius: 8px;
+      margin: 14px 0;
+    }
+
+    /* Modal / Formulario de Contraseña */
+    .auth-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.75);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      padding: 20px;
+    }
+    .auth-dialog {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      max-width: 420px;
+      width: 100%;
+      padding: 32px;
+      text-align: center;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+    .auth-icon {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      background: rgba(99, 102, 241, 0.12);
+      color: var(--indigo-accent);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 16px;
+    }
+    .auth-title {
+      font-size: 19px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .auth-desc {
+      font-size: 13.5px;
+      color: var(--text-muted);
+      margin-bottom: 22px;
+    }
+    .auth-input {
+      width: 100%;
+      padding: 12px 14px;
+      background: var(--bg-base);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      color: var(--text-main);
+      font-family: inherit;
+      font-size: 14px;
+      margin-bottom: 14px;
+      outline: none;
+    }
+    .auth-input:focus {
+      border-color: var(--indigo-accent);
+      box-shadow: 0 0 0 3px var(--indigo-glow);
+    }
+    .auth-btn {
+      width: 100%;
+      padding: 12px;
+      background: linear-gradient(135deg, var(--indigo-accent), #4f46e5);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    .error-card {
+      text-align: center;
+      padding: 60px 20px;
+    }
+    .error-card h2 { font-size: 24px; margin-bottom: 10px; }
+    .error-card p { color: var(--text-muted); margin-bottom: 20px; }
+
+    footer.viewer-footer {
+      text-align: center;
+      padding: 24px;
+      color: var(--text-faint);
+      font-size: 12.5px;
+      border-top: 1px solid var(--border-subtle);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ENCABEZADO -->
+  <header class="viewer-header">
+    <a href="/" class="brand-section">
+      <div class="brand-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2a4 4 0 0 0-4 4v1a4 4 0 0 0-3 3.87A4 4 0 0 0 2 15a4 4 0 0 0 4 4h1a4 4 0 0 0 3.87 3 4 4 0 0 0 4.26 0A4 4 0 0 0 19 19h1a4 4 0 0 0 4-4 4 4 0 0 0-3-4.13A4 4 0 0 0 16 7V6a4 4 0 0 0-4-4z"/>
+        </svg>
+      </div>
+      <div class="brand-meta">
+        <h1>KORTEXA <span class="public-badge" id="public-badge-label">Compartido</span></h1>
+      </div>
+    </a>
+
+    <div class="header-actions">
+      <button id="btn-theme-toggle" class="viewer-btn" title="Cambiar tema">
+        <span id="theme-icon">🌙</span>
+      </button>
+      <button id="btn-copy-link" class="viewer-btn" title="Copiar enlace">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        <span>Copiar Enlace</span>
+      </button>
+      <a id="btn-download-raw" href="#" class="viewer-btn primary" download style="display: none;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span>Descargar</span>
+      </a>
+    </div>
+  </header>
+
+  <!-- SPINNER GLOBAL -->
+  <div style="text-align: center; padding: 60px 0; color: var(--text-muted);" id="loading-spinner">
+    Cargando recurso compartido...
+  </div>
+
+  <!-- VISTA INDIVIDUAL (ARCHIVOS / NOTAS SUELTAS) -->
+  <main class="viewer-container" id="single-view-container" style="display: none;">
+    <!-- TARJETA METADATA -->
+    <div class="doc-meta-card" id="meta-card">
+      <h2 class="doc-title" id="doc-title">Título del Documento</h2>
+      <div class="doc-info-row">
+        <div class="doc-author">
+          <span class="author-avatar" id="author-avatar">U</span>
+          <span id="doc-author-name">Autor</span>
+        </div>
+        <span id="doc-date">Fecha</span>
+        <span id="doc-type-badge">Nota Markdown</span>
+      </div>
+    </div>
+
+    <!-- CUERPO DE CONTENIDO -->
+    <article class="content-card" id="content-card">
+      <div class="markdown-body" id="markdown-render"></div>
+      <div id="media-render" style="display: none;"></div>
+    </article>
+  </main>
+
+  <!-- VISTA COLECCIÓN (CARPETA O BÓVEDA COMPLETA) -->
+  <div class="viewer-collection-layout" id="collection-view-container" style="display: none;">
+    <!-- SIDEBAR DE ARCHIVOS -->
+    <aside class="collection-sidebar">
+      <div class="collection-meta-head">
+        <h3 class="collection-title" id="collection-title">Carpeta Compartida</h3>
+        <span class="collection-subtitle" id="collection-owner-info">De @usuario</span>
+      </div>
+      <input type="text" id="collection-search-input" class="collection-search" placeholder="Buscar archivo...">
+      <ul class="collection-files-list" id="collection-files-list"></ul>
+    </aside>
+
+    <!-- ÁREA DE CONTENIDO -->
+    <main style="min-width: 0;">
+      <div class="doc-meta-card" id="col-meta-card">
+        <h2 class="doc-title" id="col-doc-title">Selecciona un archivo</h2>
+        <div class="doc-info-row">
+          <div class="doc-author">
+            <span class="author-avatar" id="col-author-avatar">U</span>
+            <span id="col-author-name">Autor</span>
+          </div>
+          <span id="col-doc-type-badge">Nota Markdown</span>
+        </div>
+      </div>
+
+      <article class="content-card" id="col-content-card">
+        <div class="markdown-body" id="col-markdown-render"></div>
+        <div id="col-media-render" style="display: none;"></div>
+      </article>
+    </main>
+  </div>
+
+  <!-- ESTADO DE ERROR / EXPIRADO -->
+  <div class="viewer-container" id="error-view-container" style="display: none;">
+    <div class="error-card">
+      <h2 id="error-title">Recurso no disponible</h2>
+      <p id="error-desc">El enlace de compartición no existe, ha expirado o el propietario revocó el acceso.</p>
+      <a href="/" class="viewer-btn primary">Ir al Inicio de Kortexa</a>
+    </div>
+  </div>
+
+  <!-- MODAL DE CONTRASEÑA -->
+  <div class="auth-overlay" id="password-modal" style="display: none;">
+    <div class="auth-dialog">
+      <div class="auth-icon">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+      </div>
+      <h3 class="auth-title" id="auth-title">Recurso Protegido</h3>
+      <p class="auth-desc" id="auth-desc">Este recurso requiere contraseña para acceder.</p>
+      <form id="password-form">
+        <input type="password" id="share-password-input" class="auth-input" placeholder="Ingresa la contraseña..." required autofocus>
+        <div id="password-error" style="color: var(--danger); font-size: 12.5px; margin-bottom: 12px; display: none;">Contraseña incorrecta</div>
+        <button type="submit" class="auth-btn">Desbloquear Recurso</button>
+      </form>
+    </div>
+  </div>
+
+  <footer class="viewer-footer">
+    Compartido de forma segura mediante <strong>Kortexa</strong> — Tu segundo cerebro & red sináptica de conocimiento.
+  </footer>
+
+  <script>
+    // Gestión de tema
+    const btnTheme = document.getElementById('btn-theme-toggle');
+    const themeIcon = document.getElementById('theme-icon');
+    let currentTheme = localStorage.getItem('kortexa-public-theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', currentTheme);
+    themeIcon.textContent = currentTheme === 'dark' ? '☀️' : '🌙';
+
+    btnTheme.addEventListener('click', () => {
+      currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', currentTheme);
+      localStorage.setItem('kortexa-public-theme', currentTheme);
+      themeIcon.textContent = currentTheme === 'dark' ? '☀️' : '🌙';
+    });
+
+    // Copiar enlace
+    document.getElementById('btn-copy-link').addEventListener('click', () => {
+      navigator.clipboard.writeText(window.location.href).then(() => {
+        const btn = document.getElementById('btn-copy-link');
+        const span = btn.querySelector('span');
+        const prev = span.textContent;
+        span.textContent = '¡Copiado!';
+        setTimeout(() => span.textContent = prev, 2000);
+      });
+    });
+
+    // Extracción de token de URL: /s/:token
+    const pathParts = window.location.pathname.split('/');
+    const token = pathParts[pathParts.length - 1];
+
+    let cachedPassword = null;
+    let cachedVaultPassword = null;
+    let isVaultPasswordMode = false;
+    let collectionFiles = [];
+
+    async function loadSharedDoc(password = null, vaultPassword = null) {
+      const spinner = document.getElementById('loading-spinner');
+      const singleContainer = document.getElementById('single-view-container');
+      const colContainer = document.getElementById('collection-view-container');
+      const errorContainer = document.getElementById('error-view-container');
+      const pwdModal = document.getElementById('password-modal');
+
+      try {
+        const headers = {};
+        if (password || cachedPassword) headers['x-share-password'] = password || cachedPassword;
+        if (vaultPassword || cachedVaultPassword) headers['x-vault-password'] = vaultPassword || cachedVaultPassword;
+
+        const res = await fetch(`/api/public/share/${token}`, { headers });
+        if (res.status === 404 || res.status === 410) {
+          spinner.style.display = 'none';
+          errorContainer.style.display = 'block';
+          if (res.status === 410) {
+            document.getElementById('error-title').textContent = 'Enlace Expirado';
+            document.getElementById('error-desc').textContent = 'El propietario configuró una fecha de expiración para este recurso que ya ha concluido.';
+          }
+          return;
+        }
+
+        const data = await res.json();
+        spinner.style.display = 'none';
+
+        if (data.requires_password) {
+          isVaultPasswordMode = false;
+          pwdModal.style.display = 'flex';
+          document.getElementById('auth-title').textContent = 'Enlace Protegido';
+          document.getElementById('auth-desc').textContent = `Compartido por ${data.owner_fullname || data.owner_username}. Ingresa la contraseña del enlace para visualizarlo.`;
+          return;
+        }
+
+        if (data.requires_vault_password || data.vault_locked) {
+          isVaultPasswordMode = true;
+          pwdModal.style.display = 'flex';
+          document.getElementById('auth-title').textContent = 'Bóveda Cifrada (AES-256)';
+          document.getElementById('auth-desc').textContent = `Este recurso pertenece a una bóveda cifrada protegida. Ingresa la contraseña de la bóveda para descifrar el documento:`;
+          return;
+        }
+
+        pwdModal.style.display = 'none';
+
+        // Manejo según tipo de recurso: Colección (Carpeta / Bóveda) o Archivo individual
+        if (data.resource_type === 'folder' || data.resource_type === 'vault') {
+          renderCollectionView(data);
+        } else {
+          renderSingleView(data);
+        }
+
+      } catch (err) {
+        spinner.style.display = 'none';
+        errorContainer.style.display = 'block';
+        document.getElementById('error-desc').textContent = 'Ocurrió un error al cargar el contenido del enlace.';
+      }
+    }
+
+    function renderSingleView(data) {
+      const singleContainer = document.getElementById('single-view-container');
+      singleContainer.style.display = 'block';
+
+      document.getElementById('doc-title').textContent = data.title;
+      document.title = `${data.title} — Kortexa`;
+      document.getElementById('doc-author-name').textContent = `${data.owner.fullname || data.owner.username} (@${data.owner.username})`;
+      document.getElementById('author-avatar').textContent = (data.owner.username || 'U')[0].toUpperCase();
+      
+      if (data.created_at) {
+        const d = new Date(data.created_at);
+        document.getElementById('doc-date').textContent = d.toLocaleDateString('es-MX', { year: 'numeric', month: 'short', day: 'numeric' });
+      }
+
+      const downloadBtn = document.getElementById('btn-download-raw');
+      downloadBtn.href = data.download_url;
+      downloadBtn.style.display = 'inline-flex';
+
+      renderDocumentBody(data, document.getElementById('markdown-render'), document.getElementById('media-render'), document.getElementById('doc-type-badge'));
+    }
+
+    function renderCollectionView(data) {
+      const colContainer = document.getElementById('collection-view-container');
+      colContainer.style.display = 'grid';
+
+      const typeLabel = data.resource_type === 'vault' ? 'Bóveda Compartida' : 'Carpeta Compartida';
+      document.getElementById('public-badge-label').textContent = typeLabel;
+      document.getElementById('collection-title').textContent = data.title;
+      document.getElementById('collection-owner-info').textContent = `De @${data.owner.username} • ${data.files.length} archivo(s)`;
+      document.getElementById('col-author-name').textContent = `${data.owner.fullname || data.owner.username} (@${data.owner.username})`;
+      document.getElementById('col-author-avatar').textContent = (data.owner.username || 'U')[0].toUpperCase();
+
+      collectionFiles = data.files || [];
+      renderCollectionFileList(collectionFiles);
+
+      // Buscador en colección
+      const searchInput = document.getElementById('collection-search-input');
+      searchInput.addEventListener('input', (e) => {
+        const q = e.target.value.toLowerCase().trim();
+        const filtered = collectionFiles.filter(f => (f.title || f.filename).toLowerCase().includes(q));
+        renderCollectionFileList(filtered);
+      });
+
+      // Seleccionar primer archivo automáticamente si existe
+      if (collectionFiles.length > 0) {
+        selectCollectionFile(collectionFiles[0].filename);
+      }
+    }
+
+    function renderCollectionFileList(files) {
+      const listEl = document.getElementById('collection-files-list');
+      listEl.innerHTML = '';
+
+      if (files.length === 0) {
+        listEl.innerHTML = '<li style="padding: 10px; font-size: 11.5px; color: var(--text-muted); text-align: center;">Sin archivos coincidentes</li>';
+        return;
+      }
+
+      files.forEach(f => {
+        const li = document.createElement('li');
+        li.className = 'collection-file-item';
+        li.dataset.filename = f.filename;
+
+        li.innerHTML = `
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink: 0; color: #818cf8;">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+          </svg>
+          <span class="collection-file-name" title="${f.filename}">${f.title || f.filename}</span>
+        `;
+
+        li.addEventListener('click', () => {
+          selectCollectionFile(f.filename);
+        });
+
+        listEl.appendChild(li);
+      });
+    }
+
+    async function selectCollectionFile(filename) {
+      // Resaltar en lista
+      document.querySelectorAll('.collection-file-item').forEach(el => {
+        el.classList.toggle('active', el.dataset.filename === filename);
+      });
+
+      try {
+        const headers = {};
+        if (cachedPassword) headers['x-share-password'] = cachedPassword;
+        if (cachedVaultPassword) headers['x-vault-password'] = cachedVaultPassword;
+
+        const res = await fetch(`/api/public/share/${token}?file=${encodeURIComponent(filename)}`, { headers });
+        if (!res.ok) return;
+        const fileData = await res.json();
+
+        document.getElementById('col-doc-title').textContent = fileData.title || filename;
+        document.title = `${fileData.title || filename} — Kortexa`;
+
+        const downloadBtn = document.getElementById('btn-download-raw');
+        downloadBtn.href = fileData.download_url;
+        downloadBtn.style.display = 'inline-flex';
+
+        renderDocumentBody(fileData, document.getElementById('col-markdown-render'), document.getElementById('col-media-render'), document.getElementById('col-doc-type-badge'));
+      } catch (err) {
+        console.error('Error al cargar archivo de colección:', err);
+      }
+    }
+
+    function renderDocumentBody(data, mdContainer, mediaContainer, badgeEl) {
+      if (data.file_type === 'note') {
+        mdContainer.style.display = 'block';
+        mediaContainer.style.display = 'none';
+        if (badgeEl) badgeEl.textContent = 'Documento Markdown';
+
+        // Protección contra bytes cifrados crudos KENC
+        if (typeof data.content === 'string' && (data.content.startsWith('KENC') || (data.content.charCodeAt(0) === 0x4b && data.content.charCodeAt(1) === 0x45 && data.content.charCodeAt(2) === 0x4e && data.content.charCodeAt(3) === 0x43))) {
+          mdContainer.innerHTML = `
+            <div style="padding: 30px; text-align: center; color: var(--danger); background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border-subtle); margin-top: 16px;">
+              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-bottom: 12px; opacity: 0.85;">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+              <h3 style="font-size: 15px; margin-bottom: 6px; color: var(--text-main);">Contenido Cifrado</h3>
+              <p style="color: var(--text-muted); font-size: 13px;">Este documento está protegido con AES-256 y requiere la contraseña de la bóveda para ser descifrado.</p>
+            </div>
+          `;
+          return;
+        }
+
+        if (window.marked) {
+          mdContainer.innerHTML = marked.parse(data.content || '');
+          if (window.renderMathInElement) renderMathInElement(mdContainer);
+          if (window.mermaid) mermaid.run({ querySelector: '.mermaid' }).catch(() => {});
+        } else {
+          mdContainer.textContent = data.content;
+        }
+      } else if (data.file_type === 'image') {
+        mdContainer.style.display = 'none';
+        mediaContainer.style.display = 'block';
+        if (badgeEl) badgeEl.textContent = 'Imagen';
+        mediaContainer.innerHTML = `<div style="text-align: center;"><img src="${data.download_url}" style="max-width: 100%; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.2);"></div>`;
+      } else if (data.file_type === 'pdf') {
+        mdContainer.style.display = 'none';
+        mediaContainer.style.display = 'block';
+        if (badgeEl) badgeEl.textContent = 'Documento PDF';
+        mediaContainer.innerHTML = `<iframe src="${data.download_url}" style="width: 100%; height: 750px; border: 1px solid var(--border-subtle); border-radius: 10px;"></iframe>`;
+      } else if (data.file_type === 'video') {
+        mdContainer.style.display = 'none';
+        mediaContainer.style.display = 'block';
+        if (badgeEl) badgeEl.textContent = 'Video';
+        mediaContainer.innerHTML = `<video controls src="${data.download_url}" style="width: 100%; border-radius: 10px;"></video>`;
+      } else if (data.file_type === 'audio') {
+        mdContainer.style.display = 'none';
+        mediaContainer.style.display = 'block';
+        if (badgeEl) badgeEl.textContent = 'Audio';
+        mediaContainer.innerHTML = `<audio controls src="${data.download_url}" style="width: 100%; margin: 20px 0;"></audio>`;
+      }
+    }
+
+    // Formulario de contraseña
+    document.getElementById('password-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const pwd = document.getElementById('share-password-input').value;
+      const errBox = document.getElementById('password-error');
+      errBox.style.display = 'none';
+
+      try {
+        const endpoint = isVaultPasswordMode
+          ? `/api/public/share/${token}/vault-auth`
+          : `/api/public/share/${token}/auth`;
+
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pwd })
+        });
+        const data = await res.json();
+        if (data.valid) {
+          if (isVaultPasswordMode) {
+            cachedVaultPassword = pwd;
+            loadSharedDoc(cachedPassword, pwd);
+          } else {
+            cachedPassword = pwd;
+            loadSharedDoc(pwd, cachedVaultPassword);
+          }
+        } else {
+          errBox.textContent = data.error || 'Contraseña incorrecta';
+          errBox.style.display = 'block';
+        }
+      } catch {
+        errBox.textContent = 'Error al verificar la contraseña';
+        errBox.style.display = 'block';
+      }
+    });
+
+    loadSharedDoc();
+  </script>
+</body>
+</html>

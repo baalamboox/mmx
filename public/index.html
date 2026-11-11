@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261109mcpv2">
+  <link rel="stylesheet" href="styles.css?v=20261110v3">
   <script>
     (function() {
       const saved = localStorage.getItem('kortexa-theme') || 'auto';
@@ -55,6 +55,7 @@
             <div class="brand-subtitle-row">
               <span class="ai-badge">MCP AI</span>
               <span class="brand-tagline">Second Brain</span>
+              <span id="realtime-status-dot" class="realtime-dot" title="Canal en tiempo real desconectado"></span>
             </div>
           </div>
         </div>
@@ -114,6 +115,15 @@
               </span>
               <span id="btn-lock-vault-text">Seguridad y Cifrado</span>
             </button>
+            <button type="button" id="btn-decrypt-vault" class="vault-more-item" role="menuitem" title="Quitar cifrado permanentemente (descifrar archivos a texto plano)" style="display: none;">
+              <span class="vault-more-item-icon" style="color: #f59e0b;">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                  <path d="M7 11V7a5 5 0 0 1 9.9-1"/>
+                </svg>
+              </span>
+              <span>Desactivar Cifrado (Texto Plano)</span>
+            </button>
             <button type="button" id="btn-rename-vault" class="vault-more-item" role="menuitem" title="Renombrar la bóveda activa">
               <span class="vault-more-item-icon">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
@@ -121,6 +131,18 @@
                 </svg>
               </span>
               <span>Renombrar Bóveda</span>
+            </button>
+            <button type="button" id="btn-share-vault" class="vault-more-item" role="menuitem" title="Compartir toda la bóveda activa">
+              <span class="vault-more-item-icon">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="18" cy="5" r="3"/>
+                  <circle cx="6" cy="12" r="3"/>
+                  <circle cx="18" cy="19" r="3"/>
+                  <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+                  <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+                </svg>
+              </span>
+              <span>Compartir Bóveda</span>
             </button>
             <button type="button" id="btn-add-vault" class="vault-more-item" role="menuitem" title="Crear una nueva bóveda">
               <span class="vault-more-item-icon">
@@ -228,6 +250,26 @@
         <!-- Renderizado dinámico -->
       </ul>
 
+      <!-- SECCIÓN: COMPARTIDO CONMIGO (KORTEXA SHARE) -->
+      <div id="shared-with-me-container" class="shared-sidebar-container">
+        <button type="button" id="btn-toggle-shared-drawer" class="shared-sidebar-trigger-btn" title="Abrir panel de recursos compartidos conmigo">
+          <div class="notes-meta-left">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="18" cy="5" r="3"/>
+              <circle cx="6" cy="12" r="3"/>
+              <circle cx="18" cy="19" r="3"/>
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+            </svg>
+            <span class="meta-label">COMPARTIDO CONMIGO</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span id="shared-count-badge" class="meta-badge" title="Recursos compartidos contigo">0</span>
+            <svg class="shared-trigger-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+          </div>
+        </button>
+      </div>
+
       <!-- PERFIL DE USUARIO EN SIDEBAR -->
       <div id="sidebar-user-section" class="sidebar-user-section" style="display: none;">
         <div class="user-profile-card">
@@ -254,12 +296,15 @@
         </div>
       </div>
 
-      <!-- PIE DE SIDEBAR CON ESTADO Y SELECTOR DE TEMA -->
+      <!-- PIE DE SIDEBAR CON ACCESO A CHAT Y SELECTOR DE TEMA -->
       <div class="sidebar-footer">
-        <div class="neural-pulse-indicator" id="vault-status-indicator" title="Bóveda local activa (clic para gestionar bóvedas)">
-          <span class="pulse-dot"></span>
-          <span class="pulse-label">Bóveda: <strong id="vault-display-name">vault</strong></span>
-        </div>
+        <button type="button" id="btn-toggle-chat-drawer" class="sidebar-chat-btn" title="Chat y Red de Amigos">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          <span class="sidebar-chat-label">Chat</span>
+          <span id="chat-unread-badge" class="chat-unread-badge sidebar-chat-badge" style="display: none;">0</span>
+        </button>
         
         <div class="theme-switcher" title="Modo de interfaz: Claro, Oscuro o Automático">
           <button id="theme-btn-light" class="theme-btn" data-theme-val="light" title="Modo Claro">
@@ -333,6 +378,18 @@
                 <span>Editor</span>
               </button>
             </div>
+
+            <!-- BOTÓN COMPARTIR DOCUMENTO (KORTEXA SHARE) -->
+            <button id="btn-share-note" class="share-action-btn" title="Compartir este documento">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="18" cy="5" r="3"/>
+                <circle cx="6" cy="12" r="3"/>
+                <circle cx="18" cy="19" r="3"/>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+              </svg>
+              <span>Compartir</span>
+            </button>
 
             <button id="btn-delete-note" class="icon-action-btn danger" title="Eliminar nota">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -520,6 +577,41 @@
                 <path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/>
               </svg>
             </button>
+            <div style="position: relative; display: inline-flex;">
+              <button type="button" class="toolbar-btn" data-action="emoji" id="btn-toolbar-emoji" title="Insertar Emoji en la Nota">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"/>
+                  <path d="M8 14s1.5 2 4 2 4-2 4-2"/>
+                  <line x1="9" y1="9" x2="9.01" y2="9"/>
+                  <line x1="15" y1="9" x2="15.01" y2="9"/>
+                </svg>
+              </button>
+              <div id="editor-emoji-popover" class="editor-emoji-popover" style="display: none;">
+                <div class="emoji-picker-header">
+                  <input type="text" id="editor-emoji-search" class="emoji-picker-search" placeholder="Buscar emoji en nota...">
+                </div>
+                <div class="emoji-tabs-bar" id="editor-emoji-tabs">
+                  <button type="button" class="emoji-tab-btn active" data-cat="smileys" title="Caras y Emociones">😃</button>
+                  <button type="button" class="emoji-tab-btn" data-cat="gestures" title="Gestos y Personas">👍</button>
+                  <button type="button" class="emoji-tab-btn" data-cat="hearts" title="Amor y Corazones">❤️</button>
+                  <button type="button" class="emoji-tab-btn" data-cat="objects" title="Objetos y Festejo">🎉</button>
+                  <button type="button" class="emoji-tab-btn" data-cat="nature" title="Naturaleza y Animales">🌿</button>
+                  <button type="button" class="emoji-tab-btn" data-cat="food" title="Comida y Bebida">🍕</button>
+                </div>
+                <div id="editor-emoji-grid" class="emoji-grid-container"></div>
+                <div class="emoji-quick-reactions" id="editor-emoji-quick">
+                  <span class="emoji-quick-label">Rápidos:</span>
+                  <button type="button" class="emoji-quick-btn" data-emoji="👍">👍</button>
+                  <button type="button" class="emoji-quick-btn" data-emoji="❤️">❤️</button>
+                  <button type="button" class="emoji-quick-btn" data-emoji="🔥">🔥</button>
+                  <button type="button" class="emoji-quick-btn" data-emoji="✨">✨</button>
+                  <button type="button" class="emoji-quick-btn" data-emoji="💡">💡</button>
+                  <button type="button" class="emoji-quick-btn" data-emoji="📝">📝</button>
+                  <button type="button" class="emoji-quick-btn" data-emoji="✅">✅</button>
+                  <button type="button" class="emoji-quick-btn" data-emoji="⭐">⭐</button>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div class="toolbar-divider"></div>
@@ -726,6 +818,180 @@
         <div id="graph-container"></div>
       </section>
     </main>
+
+    <!-- BARRA LATERAL DERECHA (SIDEBAR DE CHAT & RED DE AMIGOS) -->
+    <aside id="chat-widget" class="chat-widget chat-sidebar" style="display: none;">
+      <!-- VISTA 1: LISTA DE AMIGOS & SOLICITUDES -->
+    <div id="chat-view-friends" class="chat-view active">
+      <div class="chat-header">
+        <div class="chat-header-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2.2">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+          <span>Amigos & Mensajes</span>
+        </div>
+        <div class="chat-header-actions">
+          <button type="button" id="btn-close-chat-widget" class="chat-header-btn" title="Minimizar">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- BANNER DE PERMISOS DE NOTIFICACIÓN DE ESCRITORIO -->
+      <div id="chat-perm-banner" class="chat-perm-banner" style="display: none;">
+        <span>🔔 Activa alertas en pantalla para tus mensajes</span>
+        <button type="button" id="btn-enable-desktop-notifs" class="chat-btn-perm">Activar</button>
+      </div>
+
+      <!-- TABS DENTRO DEL PANEL DE AMIGOS -->
+      <div class="chat-tabs-bar">
+        <button type="button" id="chat-tab-friends-btn" class="chat-tab-btn active">Amigos</button>
+        <button type="button" id="chat-tab-requests-btn" class="chat-tab-btn">
+          Solicitudes
+          <span id="chat-requests-count-badge" class="chat-tab-badge" style="display: none;">0</span>
+        </button>
+        <button type="button" id="chat-tab-add-btn" class="chat-tab-btn">➕ Añadir</button>
+      </div>
+
+      <!-- PANEL: LISTA DE AMIGOS -->
+      <div id="chat-panel-friends" class="chat-panel-content">
+        <div id="chat-friends-list" class="chat-friends-list"></div>
+      </div>
+
+      <!-- PANEL: SOLICITUDES PENDIENTES -->
+      <div id="chat-panel-requests" class="chat-panel-content" style="display: none;">
+        <div id="chat-incoming-requests-list" class="chat-requests-list"></div>
+      </div>
+
+      <!-- PANEL: AÑADIR AMIGO -->
+      <div id="chat-panel-add" class="chat-panel-content" style="display: none;">
+        <div style="padding: 12px;">
+          <label style="display: block; font-size: 11.5px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px;">Buscar usuario por @usuario o nombre:</label>
+          <div style="position: relative;">
+            <input type="text" id="chat-add-friend-search" class="chat-search-input" placeholder="Buscar usuario en Kortexa...">
+            <div id="chat-add-friend-dropdown" class="chat-search-dropdown" style="display: none;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VISTA 2: CONVERSACIÓN PRIVADA ACTIVA -->
+    <div id="chat-view-conversation" class="chat-view" style="display: none;">
+      <div class="chat-header">
+        <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+          <button type="button" id="btn-back-to-friends" class="chat-header-btn" title="Volver a amigos">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <div class="share-user-avatar-wrap" style="width: 26px; height: 26px;">
+            <div class="share-user-avatar" id="conv-friend-avatar" style="width: 26px; height: 26px; font-size: 11px;">U</div>
+            <span id="conv-friend-presence-dot" class="user-presence-dot avatar-badge"></span>
+          </div>
+          <div style="min-width: 0;">
+            <div id="conv-friend-name" class="conv-name">Amigo</div>
+            <div id="conv-friend-status" class="conv-status">Desconectado</div>
+          </div>
+        </div>
+        <div class="chat-header-actions">
+          <button type="button" id="btn-close-conv" class="chat-header-btn" title="Minimizar">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- ÁREA DE MENSAJES -->
+      <div id="chat-messages-container" class="chat-messages-container"></div>
+
+      <!-- SECCIÓN / SELECTOR DE EMOJIS -->
+      <div id="chat-emoji-picker" class="chat-emoji-picker" style="display: none;">
+        <div class="emoji-picker-header">
+          <input type="text" id="chat-emoji-search" class="emoji-picker-search" placeholder="Buscar emoji (ej. risa, fuego, ok, amor)...">
+        </div>
+        <div class="emoji-tabs-bar" id="chat-emoji-tabs">
+          <button type="button" class="emoji-tab-btn active" data-cat="smileys" title="Caras y Emociones">😃</button>
+          <button type="button" class="emoji-tab-btn" data-cat="gestures" title="Gestos y Personas">👍</button>
+          <button type="button" class="emoji-tab-btn" data-cat="hearts" title="Amor y Corazones">❤️</button>
+          <button type="button" class="emoji-tab-btn" data-cat="objects" title="Objetos y Festejo">🎉</button>
+          <button type="button" class="emoji-tab-btn" data-cat="nature" title="Naturaleza y Animales">🌿</button>
+          <button type="button" class="emoji-tab-btn" data-cat="food" title="Comida y Bebida">🍕</button>
+        </div>
+        <div id="chat-emoji-grid" class="emoji-grid-container"></div>
+        <div class="emoji-quick-reactions" id="chat-emoji-quick">
+          <span class="emoji-quick-label">Rápidos:</span>
+          <button type="button" class="emoji-quick-btn" data-emoji="👍">👍</button>
+          <button type="button" class="emoji-quick-btn" data-emoji="❤️">❤️</button>
+          <button type="button" class="emoji-quick-btn" data-emoji="😂">😂</button>
+          <button type="button" class="emoji-quick-btn" data-emoji="🔥">🔥</button>
+          <button type="button" class="emoji-quick-btn" data-emoji="🎉">🎉</button>
+          <button type="button" class="emoji-quick-btn" data-emoji="👏">👏</button>
+          <button type="button" class="emoji-quick-btn" data-emoji="🚀">🚀</button>
+          <button type="button" class="emoji-quick-btn" data-emoji="😍">😍</button>
+        </div>
+      </div>
+
+      <!-- INPUT DE ENVÍO -->
+      <form id="chat-message-form" class="chat-input-bar">
+        <button type="button" id="btn-chat-emoji" class="chat-emoji-btn" title="Insertar emoji">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M8 14s1.5 2 4 2 4-2 4-2"/>
+            <line x1="9" y1="9" x2="9.01" y2="9"/>
+            <line x1="15" y1="9" x2="15.01" y2="9"/>
+          </svg>
+        </button>
+        <input type="text" id="chat-message-input" class="chat-msg-input" placeholder="Escribe un mensaje..." autocomplete="off">
+        <button type="submit" id="btn-send-chat-msg" class="chat-send-btn" title="Enviar mensaje">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <line x1="22" y1="2" x2="11" y2="13"/>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+        </button>
+      </form>
+    </div>
+  </aside>
+
+    <!-- BARRA LATERAL DERECHA (COMPARTIDO CONMIGO AGRUPADO POR USUARIO) -->
+    <aside id="shared-with-me-sidebar" class="chat-widget shared-sidebar-drawer" style="display: none;">
+      <!-- CABECERA DEL PANEL -->
+      <div class="chat-header shared-drawer-header">
+        <div class="chat-header-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="18" cy="5" r="3"/>
+            <circle cx="6" cy="12" r="3"/>
+            <circle cx="18" cy="19" r="3"/>
+            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+          </svg>
+          <span>Compartido Conmigo</span>
+          <span id="shared-sidebar-total-badge" class="shared-user-count-pill" style="display: none;">0</span>
+        </div>
+        <div class="chat-header-actions">
+          <button type="button" id="btn-close-shared-sidebar" class="chat-header-btn" title="Cerrar panel">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- BUSCADOR / FILTRO RÁPIDO -->
+      <div class="shared-drawer-search-bar">
+        <div class="shared-search-input-wrap">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="shared-search-icon">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input type="text" id="shared-drawer-filter-input" class="shared-filter-input" placeholder="Buscar por archivo o @usuario...">
+        </div>
+      </div>
+
+      <!-- CONTENEDOR DE GRUPOS DE USUARIOS -->
+      <div id="shared-drawer-users-container" class="shared-drawer-content">
+        <!-- Renderizado dinámico agrupado por usuario -->
+      </div>
+    </aside>
   </div>
 
   <!-- COMPONENTE MODAL DE ALERTAS Y CONFIRMACIÓN KORTEXA -->
@@ -751,6 +1017,200 @@
       <div class="modal-footer">
         <button id="modal-btn-cancel" class="modal-btn secondary">Cancelar</button>
         <button id="modal-btn-confirm" class="modal-btn danger">Eliminar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL PARA COMPARTIR DOCUMENTOS / NOTAS (KORTEXA SHARE) -->
+  <div id="share-modal" class="modal-backdrop" aria-hidden="true">
+    <div class="modal-card share-modal-card" role="dialog" aria-modal="true" aria-labelledby="share-modal-title">
+      <div class="modal-header share-modal-header">
+        <div class="share-modal-header-left">
+          <div class="modal-icon-badge info" style="background: rgba(99, 102, 241, 0.15); color: #818cf8; border-color: rgba(99, 102, 241, 0.3);">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <circle cx="18" cy="5" r="3"/>
+              <circle cx="6" cy="12" r="3"/>
+              <circle cx="18" cy="19" r="3"/>
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+            </svg>
+          </div>
+          <div>
+            <h3 id="share-modal-title" class="share-modal-title">Compartir Documento</h3>
+            <p id="share-modal-subtitle" class="share-modal-subtitle">Configura el acceso para este recurso</p>
+          </div>
+        </div>
+        <button type="button" id="btn-close-share-modal" class="modal-close-btn" title="Cerrar ventana">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+
+      <div class="modal-body share-modal-body">
+        <!-- PESTAÑAS: ENLACE PÚBLICO / USUARIOS -->
+        <div class="share-tabs-nav">
+          <button type="button" id="share-tab-btn-public" class="share-tab-btn active">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            <span>Enlace Público</span>
+          </button>
+          <button type="button" id="share-tab-btn-users" class="share-tab-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            <span>Usuarios de Kortexa</span>
+            <span id="share-users-count" class="badge-count" style="display: none;">0</span>
+          </button>
+        </div>
+
+        <!-- PANEL 1: ENLACE PÚBLICO -->
+        <div id="share-panel-public" class="share-tab-panel active">
+          <div class="share-toggle-row">
+            <div class="share-toggle-info">
+              <span class="share-toggle-title">Acceso por Enlace Web</span>
+              <span class="share-toggle-desc">Cualquiera con este enlace podrá ver el documento en el navegador.</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggle-public-link">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <div id="public-link-details" class="public-link-details" style="display: none;">
+            <div class="share-url-box">
+              <input type="text" id="share-url-input" class="share-url-input" readonly>
+              <button type="button" id="btn-copy-share-url" class="modal-btn primary" style="white-space: nowrap;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <span id="copy-share-url-text">Copiar</span>
+              </button>
+            </div>
+
+            <!-- OPCIONES DE SEGURIDAD DEL ENLACE -->
+            <div class="share-options-group">
+              <div class="share-options-header">
+                <span class="share-options-title">Seguridad y Control de Acceso</span>
+              </div>
+
+              <!-- OPCIÓN: CONTRASEÑA -->
+              <div class="share-setting-card">
+                <div class="share-setting-header">
+                  <div class="share-setting-meta">
+                    <div class="share-setting-icon-badge" style="background: rgba(99, 102, 241, 0.15); color: #818cf8;">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                      </svg>
+                    </div>
+                    <div class="share-setting-texts">
+                      <span class="share-setting-title">Proteger con contraseña</span>
+                      <span class="share-setting-subtitle">Exige una clave para ver o descargar el recurso</span>
+                    </div>
+                  </div>
+                  <label class="toggle-switch compact" title="Activar/desactivar contraseña">
+                    <input type="checkbox" id="chk-share-password">
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+                <div id="share-password-field" class="share-setting-expandable" style="display: none;">
+                  <div class="share-input-with-icon">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="share-input-leading-icon">
+                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                      <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                    </svg>
+                    <input type="password" id="input-share-password" class="modal-input-field" placeholder="Escribe una contraseña para el enlace..." autocomplete="new-password">
+                    <button type="button" id="btn-toggle-share-pwd-visibility" class="share-pwd-toggle-btn" title="Mostrar/ocultar contraseña" tabindex="-1">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="icon-share-pwd-eye">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                        <circle cx="12" cy="12" r="3"/>
+                      </svg>
+                    </button>
+                  </div>
+                  <p class="share-field-hint">Los visitantes deberán ingresar esta clave para ver el documento.</p>
+                </div>
+              </div>
+
+              <!-- OPCIÓN: EXPIRACIÓN -->
+              <div class="share-setting-card">
+                <div class="share-setting-header">
+                  <div class="share-setting-meta">
+                    <div class="share-setting-icon-badge" style="background: rgba(236, 72, 153, 0.15); color: #f472b6;">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                        <line x1="16" y1="2" x2="16" y2="6"/>
+                        <line x1="8" y1="2" x2="8" y2="6"/>
+                        <line x1="3" y1="10" x2="21" y2="10"/>
+                      </svg>
+                    </div>
+                    <div class="share-setting-texts">
+                      <span class="share-setting-title">Fecha de expiración</span>
+                      <span class="share-setting-subtitle">Desactiva el enlace automáticamente a partir de esta fecha</span>
+                    </div>
+                  </div>
+                  <label class="toggle-switch compact" title="Activar/desactivar fecha de expiración">
+                    <input type="checkbox" id="chk-share-expiry">
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+                <div id="share-expiry-field" class="share-setting-expandable" style="display: none;">
+                  <div class="share-input-with-icon">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="share-input-leading-icon">
+                      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                      <line x1="16" y1="2" x2="16" y2="6"/>
+                      <line x1="8" y1="2" x2="8" y2="6"/>
+                      <line x1="3" y1="10" x2="21" y2="10"/>
+                    </svg>
+                    <input type="date" id="input-share-expiry" class="modal-input-field">
+                  </div>
+                  <p class="share-field-hint">Al llegar la fecha límite, el enlace dejará de estar disponible.</p>
+                </div>
+              </div>
+
+              <!-- BARRA DE ACCIÓN: GUARDAR CONFIGURACIÓN -->
+              <div class="share-save-action-bar">
+                <button type="button" id="btn-save-public-settings" class="share-save-btn">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                    <polyline points="17 21 17 13 7 13 7 21"/>
+                    <polyline points="7 3 7 8 15 8"/>
+                  </svg>
+                  <span id="btn-save-public-settings-text">Guardar Opciones de Enlace</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- PANEL 2: COMPARTIR CON USUARIOS -->
+        <div id="share-panel-users" class="share-tab-panel" style="display: none;">
+          <div class="share-user-search-wrapper">
+            <div class="share-search-input-group">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="share-search-icon">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+              <input type="text" id="share-user-search-input" class="modal-input-field" placeholder="Buscar por @usuario, nombre o email..." autocomplete="off">
+              <!-- LISTA DESPLEGABLE DE AUTOCOMPLETADO DE USUARIOS -->
+              <div id="share-users-dropdown" class="share-users-dropdown" style="display: none;"></div>
+            </div>
+
+            <div class="share-permission-select-group">
+              <select id="share-user-permission-select" class="modal-input-field">
+                <option value="read">👁️ Solo lectura</option>
+                <option value="write">✍️ Puede editar</option>
+              </select>
+              <button type="button" id="btn-add-user-share" class="modal-btn primary" disabled>
+                Compartir
+              </button>
+            </div>
+          </div>
+
+          <!-- LISTA DE USUARIOS CON ACCESO -->
+          <div class="share-members-section">
+            <span class="share-members-label">PERSONAS CON ACCESO</span>
+            <div id="share-members-list" class="share-members-list">
+              <!-- Renderizado dinámico -->
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer" style="justify-content: flex-end;">
+        <button type="button" id="btn-close-share-modal-footer" class="modal-btn secondary">Cerrar</button>
       </div>
     </div>
   </div>
@@ -940,7 +1400,7 @@
           </div>
           <h3 id="voice-recorder-title" style="margin: 0; font-size: 16px;">Grabadora de Notas de Voz</h3>
         </div>
-        <button type="button" id="btn-close-voice-rec" class="icon-action-btn" title="Cerrar grabadora">
+        <button type="button" id="btn-close-voice-rec" class="modal-close-btn" title="Cerrar grabadora">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18"/>
             <line x1="6" y1="6" x2="18" y2="18"/>
@@ -1751,9 +2211,11 @@
   <!-- INPUT OCULTO PARA CARGA DE MULTIMEDIA Y ARCHIVOS -->
   <input type="file" id="media-file-input" style="display: none;" multiple accept="image/*,video/*,audio/*,.pdf,.txt">
 
-  <!-- CONTENEDOR DE NOTIFICACIONES TOAST -->
+
+
+    <!-- CONTENEDOR DE NOTIFICACIONES TOAST -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <script src="app.js?v=20261109mcpv2"></script>
+  <script src="app.js?v=20261110v3"></script>
 </body>
 </html>

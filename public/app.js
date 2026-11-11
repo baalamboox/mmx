@@ -36,6 +36,7 @@ window.fetch = async function(url, options = {}) {
 // Estado global de la aplicación
 const state = {
   currentUser: null,
+  onlineUsers: new Set(),
   notes: [],
   folders: [],
   activeNote: null,
@@ -465,10 +466,14 @@ function setupAuthEventListeners() {
       closeAuthModal();
       showToast(`¡Bienvenido, ${data.user.nombres}!`, 'success');
 
+      initWebSocketManager();
+      loadUnreadMessagesSummary();
+      loadFriendsData();
       const isUnlocked = await loadVaultInfo();
       if (isUnlocked) {
         await loadNotesAndFolders();
         restoreOrSelectDefaultNote();
+        await loadSharedWithMe();
       }
     } catch (err) {
       if (loginErrorBanner) {
@@ -579,6 +584,14 @@ function setupAuthEventListeners() {
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
     } catch {}
+
+    if (wsClient) {
+      try { wsClient.close(); } catch {}
+      wsClient = null;
+    }
+    updateRealtimeStatus(false);
+    toggleChatWidget(false);
+    activeChatFriend = null;
 
     localStorage.removeItem('kortexa_auth_token');
     localStorage.removeItem('kortexa-last-note');
@@ -1125,13 +1138,19 @@ async function init() {
   applyTheme(state.theme);
   setupEventListeners();
   setupAuthEventListeners();
+  setupChatWidgetEventListeners();
+  setupSharedDrawerEventListeners();
+  setupEmojiPickers();
 
   const isAuth = await checkAuthStatus();
   if (isAuth) {
+    initWebSocketManager();
+    loadUnreadMessagesSummary();
     const isUnlocked = await loadVaultInfo();
     if (isUnlocked) {
       await loadNotesAndFolders();
       restoreOrSelectDefaultNote();
+      await loadSharedWithMe();
     }
   }
 }
@@ -1152,16 +1171,20 @@ async function loadVaultInfo() {
     state.activeVault = data.name;
     state.isVaultEncrypted = !!data.encrypted;
     state.isVaultLocked = !!data.locked;
+    state.isVaultShared = !!data.isShared;
+    state.vaultPermission = data.permission || 'write';
 
     const vaultNameEl = document.getElementById('vault-display-name');
     const treeVaultEl = document.getElementById('tree-vault-name');
     const vaultIndicatorEl = document.getElementById('vault-status-indicator');
 
-    if (vaultNameEl) vaultNameEl.textContent = data.name;
-    if (treeVaultEl) treeVaultEl.textContent = data.name.toUpperCase();
+    const displayName = data.displayName || data.name;
+    if (vaultNameEl) vaultNameEl.textContent = displayName;
+    if (treeVaultEl) treeVaultEl.textContent = (data.name || '').toUpperCase();
     if (vaultIndicatorEl) {
       const lockLabel = data.encrypted ? ' (Protegida AES-256)' : '';
-      vaultIndicatorEl.title = `Bóveda activa: ${data.name}${lockLabel} (${data.path}) - Clic para gestionar`;
+      const sharedLabel = data.isShared ? ` [Compartida - ${data.permission === 'write' ? 'Edición' : 'Lectura'}]` : '';
+      vaultIndicatorEl.title = `Bóveda activa: ${displayName}${lockLabel}${sharedLabel} (${data.path}) - Clic para gestionar`;
     }
 
     // Actualizar botones de candado
@@ -1169,8 +1192,8 @@ async function loadVaultInfo() {
 
     // Actualizar nombre en trigger del dropdown personalizado
     if (vaultDropdownLabel) {
-      vaultDropdownLabel.textContent = data.name;
-      vaultDropdownLabel.title = `Bóveda activa: ${data.name}`;
+      vaultDropdownLabel.textContent = displayName;
+      vaultDropdownLabel.title = `Bóveda activa: ${displayName}`;
     }
 
     // Actualizar items del dropdown personalizado de bóvedas
@@ -1182,7 +1205,7 @@ async function loadVaultInfo() {
         item.className = `custom-vault-item ${v.isActive ? 'active' : ''}`;
         item.setAttribute('role', 'option');
         item.setAttribute('aria-selected', v.isActive ? 'true' : 'false');
-        item.title = `Cambiar a la bóveda "${v.name}"`;
+        item.title = `Cambiar a tu bóveda "${v.name}"`;
 
         const encIcon = v.isEncrypted
           ? `<span class="custom-vault-item-lock" title="Cifrado AES-256">
@@ -1220,6 +1243,51 @@ async function loadVaultInfo() {
 
         vaultDropdownMenu.appendChild(item);
       });
+
+      // Bóvedas compartidas conmigo
+      if (vaultsData.sharedVaults && vaultsData.sharedVaults.length > 0) {
+        const sharedHeader = document.createElement('div');
+        sharedHeader.className = 'custom-vault-section-title';
+        sharedHeader.textContent = 'COMPARTIDAS CONMIGO';
+        vaultDropdownMenu.appendChild(sharedHeader);
+
+        vaultsData.sharedVaults.forEach(sv => {
+          const item = document.createElement('div');
+          item.className = `custom-vault-item shared ${sv.isActive ? 'active' : ''}`;
+          item.setAttribute('role', 'option');
+          item.setAttribute('aria-selected', sv.isActive ? 'true' : 'false');
+          item.title = `Cambiar a la bóveda compartida "${sv.displayName}"`;
+
+          const permIcon = sv.permission === 'write' ? '✍️' : '👁️';
+
+          item.innerHTML = `
+            <div class="custom-vault-item-left">
+              <svg class="custom-vault-item-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="color: #818cf8;">
+                <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+              </svg>
+              <span class="custom-vault-item-name" style="font-weight: 600;">${escapeHtml(sv.name)}</span>
+              <span class="custom-vault-item-owner" style="font-size: 10px; color: var(--text-muted);">@${escapeHtml(sv.owner.username)}</span>
+            </div>
+            <div class="custom-vault-item-right" style="gap: 6px;">
+              <span style="font-size: 10.5px;" title="${sv.permission === 'write' ? 'Edición permitida' : 'Solo lectura'}">${permIcon}</span>
+              <svg class="custom-vault-item-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            </div>
+          `;
+
+          item.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            closeVaultDropdown();
+            if (!sv.isActive) {
+              await switchVault(null, sv.shareId);
+            }
+          });
+
+          vaultDropdownMenu.appendChild(item);
+        });
+      }
 
       // Divisor
       const divider = document.createElement('div');
@@ -1307,6 +1375,11 @@ function updateLockButtons(encrypted, locked) {
     btnLockVault.title = encrypted
       ? (locked ? 'Bóveda Cifrada y Bloqueada (Clic para desbloquear)' : 'Bloquear Bóveda (Ctrl+L o Clic)')
       : 'Cifrar Bóveda con Contraseña (AES-256)';
+  }
+
+  const btnDecrypt = document.getElementById('btn-decrypt-vault');
+  if (btnDecrypt) {
+    btnDecrypt.style.display = (encrypted && !locked) ? 'flex' : 'none';
   }
 }
 
@@ -1452,7 +1525,7 @@ async function manageVaultSecurity() {
 }
 
 async function renameVault() {
-  const currentName = document.getElementById('vault-display-name')?.textContent || 'vault';
+  const currentName = state.activeVault || document.getElementById('vault-dropdown-label')?.textContent || 'vault';
   const newName = await showPromptModal({
     title: 'Renombrar Bóveda',
     message: `Ingresa el nuevo nombre para la carpeta de la bóveda:`,
@@ -1532,12 +1605,13 @@ async function createNewVault() {
   }
 }
 
-async function switchVault(vaultName) {
+async function switchVault(vaultName, shareId = null) {
   try {
+    const payload = shareId ? { shareId } : { name: vaultName };
     const res = await fetch('/api/vault/switch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: vaultName })
+      body: JSON.stringify(payload)
     });
     const data = await res.json();
     if (!res.ok) {
@@ -1545,7 +1619,7 @@ async function switchVault(vaultName) {
       return;
     }
 
-    showToast(`Bóveda cambiada a "${data.name}"`, 'info');
+    showToast(`Bóveda cambiada a "${data.displayName || data.name}"`, 'info');
     closeVaultManagerModal();
     await loadVaultInfo();
     await loadNotesAndFolders();
@@ -1728,6 +1802,10 @@ async function selectNote(noteIdentifier) {
     // Si viene solo el título o la ruta completa, consultamos la API
     const res = await fetch(`/api/note?path=${encodeURIComponent(noteIdentifier)}&title=${encodeURIComponent(noteIdentifier)}`);
     if (!res.ok) {
+      if (res.status === 423) {
+        showLockScreen(state.activeVault);
+        return;
+      }
       if (res.status === 404) {
         // La nota no existe aún (ej. enlazada con [[]]) -> la preparamos en la carpeta seleccionada o raíz
         const rawName = noteIdentifier.replace(/\.md$/, '');
@@ -1811,6 +1889,32 @@ async function saveCurrentNote() {
 
   const currentTitle = titleInputEl.value.trim() || 'Sin Título';
   const currentContent = markdownInputEl.value;
+
+  // Si es una nota compartida por otro usuario
+  if (state.activeNote.isSharedWithMe) {
+    if (state.activeNote.permission !== 'write') {
+      setSaveStatus('Solo Lectura');
+      return;
+    }
+    setSaveStatus('Guardando...', true);
+    try {
+      const res = await fetch('/api/shared-notes/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          share_id: state.activeNote.shareId,
+          sub_path: state.activeNote.subPath || '',
+          content: currentContent
+        })
+      });
+      if (!res.ok) throw new Error('Error al guardar');
+      setSaveStatus('Guardado');
+    } catch (err) {
+      setSaveStatus('Error al guardar');
+      showToast('Error al guardar cambios en la nota compartida', 'danger');
+    }
+    return;
+  }
 
   setSaveStatus('Guardando...', true);
 
@@ -2521,6 +2625,30 @@ async function loadBacklinks(title) {
 function renderMarkdown() {
   const rawText = markdownInputEl.value;
 
+  // Protección contra datos cifrados crudos / binarios KENC (evita congelamiento de regex y KaTeX)
+  if (rawText && (rawText.startsWith('KENC') || (rawText.charCodeAt(0) === 0x4b && rawText.charCodeAt(1) === 0x45 && rawText.charCodeAt(2) === 0x4e && rawText.charCodeAt(3) === 0x43))) {
+    markdownPreviewEl.innerHTML = `
+      <div style="padding: 40px 20px; text-align: center; color: var(--danger);">
+        <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-bottom: 12px; opacity: 0.85;">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+        <h3 style="font-size: 16px; margin-bottom: 8px; color: var(--text-main);">Archivo Cifrado con AES-256</h3>
+        <p style="color: var(--text-muted); font-size: 13px; max-width: 440px; margin: 0 auto 16px; line-height: 1.5;">
+          Este archivo está protegido criptográficamente y la bóveda está bloqueada. Ingrese la contraseña de la bóveda para descifrarlo de forma segura.
+        </p>
+        <button id="btn-unlock-preview-inline" class="btn btn-primary" style="padding: 8px 18px; font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 8px;">
+          Desbloquear Bóveda
+        </button>
+      </div>
+    `;
+    const btnUnlock = document.getElementById('btn-unlock-preview-inline');
+    if (btnUnlock) {
+      btnUnlock.addEventListener('click', () => showLockScreen(state.activeVault));
+    }
+    return;
+  }
+
   // 1. Incrustaciones tipo Obsidian: ![[archivo.ext]] o ![[archivo.ext|300]]
   let processedText = rawText.replace(/!\[\[(.*?)\]\]/g, (match, rawInner) => {
     let target = rawInner.trim();
@@ -2798,6 +2926,12 @@ function renderTree(notesToRender, folders) {
         </div>
         <div class="folder-meta">
           <span class="folder-badge">${folderTotal}</span>
+          <button class="folder-share-btn" title="Compartir carpeta ${subNode.name}">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+            </svg>
+          </button>
           <button class="folder-add-btn" title="Añadir nota o subcarpeta en ${subNode.name}">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
           </button>
@@ -2809,6 +2943,17 @@ function renderTree(notesToRender, folders) {
 
       // Clic para expandir/colapsar o seleccionar carpeta
       header.addEventListener('click', (e) => {
+        const shareBtn = e.target.closest('.folder-share-btn');
+        if (shareBtn) {
+          e.stopPropagation();
+          openShareModalForResource({
+            path: subNode.fullPath,
+            title: subNode.name,
+            type: 'folder'
+          });
+          return;
+        }
+
         const addBtn = e.target.closest('.folder-add-btn');
         if (addBtn) {
           e.stopPropagation();
@@ -3179,6 +3324,24 @@ function setupEventListeners() {
     renameVault();
   });
 
+  // Compartir bóveda completa
+  const btnShareVault = document.getElementById('btn-share-vault');
+  btnShareVault?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeVaultMoreMenu();
+    if (state.isSharedVault) {
+      showToast('Esta bóveda es compartida. Solo el propietario puede administrar los accesos.', 'info');
+      return;
+    }
+    if (window.openShareModalForResource) {
+      window.openShareModalForResource({
+        path: '',
+        title: state.activeVault || 'Bóveda Principal',
+        type: 'vault'
+      });
+    }
+  });
+
   // Crear nueva bóveda
   btnAddVault?.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -3250,6 +3413,12 @@ function setupEventListeners() {
   btnVaultManagerSecurity?.addEventListener('click', () => {
     manageVaultSecurity();
   });
+  const btnDecryptVault = document.getElementById('btn-decrypt-vault');
+  btnDecryptVault?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeVaultMoreMenu();
+    manageVaultSecurity();
+  });
 
   // Pantalla de bloqueo
   formUnlockVault?.addEventListener('submit', (e) => {
@@ -3306,6 +3475,7 @@ function setupEventListeners() {
   setupMathEquationEventListeners();
   setupDiagramEventListeners();
   setupDiagramFullscreenEventListeners();
+  setupShareModalEventListeners();
 
   // Selector de tema (Claro, Oscuro, Automático)
   themeBtnLight?.addEventListener('click', () => applyTheme('light'));
@@ -3607,6 +3777,11 @@ function applyMarkdownFormat(action, extraValue) {
 
     case 'record-audio': {
       openVoiceRecorderModal();
+      return;
+    }
+
+    case 'emoji': {
+      toggleEditorEmojiPopover();
       return;
     }
   }
@@ -5973,6 +6148,2390 @@ function setupDiagramFullscreenEventListeners() {
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && modal.classList.contains('active')) {
       closeDiagramFullscreenModal();
+    }
+  });
+}
+
+// ==========================================
+// KORTEXA SHARE — SISTEMA PARA COMPARTIR (FASE 1)
+// ==========================================
+
+let shareModalCurrentResource = null;
+let shareModalSelectedTargetUser = null;
+let shareUserSearchDebounce = null;
+const openSharedFoldersState = new Set();
+const openSharedUserGroupsState = new Set();
+let allSharedWithMeItems = [];
+
+// Devuelve el icono SVG semántico según el tipo de archivo compartido
+function getSharedFileIconSvg(filename) {
+  const ext = (filename || '').split('.').pop().toLowerCase();
+  if (['mp4', 'webm', 'mov', 'mkv', 'avi'].includes(ext)) {
+    return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#f43f5e" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><rect x="2" y="4" width="15" height="16" rx="2"/><polygon points="23 7 17 12 23 17 23 7"/></svg>';
+  }
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) {
+    return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
+  }
+  if (['mp3', 'wav', 'ogg', 'm4a', 'flac'].includes(ext)) {
+    return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#ec4899" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';
+  }
+  if (['pdf'].includes(ext)) {
+    return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 15h6"/><path d="M9 11h6"/></svg>';
+  }
+  return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+}
+
+function toggleSharedDrawer(open) {
+  const drawer = document.getElementById('shared-with-me-sidebar');
+  const btnTrigger = document.getElementById('btn-toggle-shared-drawer');
+  if (!drawer) return;
+
+  if (open) {
+    toggleChatWidget(false);
+  }
+
+  drawer.style.display = open ? 'flex' : 'none';
+  if (btnTrigger) btnTrigger.classList.toggle('active', open);
+
+  if (open) {
+    loadSharedWithMe();
+  }
+
+  window.dispatchEvent(new Event('resize'));
+  setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
+}
+
+function renderSharedUserGroups(itemsToRender) {
+  const container = document.getElementById('shared-drawer-users-container');
+  if (!container) return;
+
+  if (!itemsToRender || itemsToRender.length === 0) {
+    container.innerHTML = `
+      <div style="padding: 36px 16px; text-align: center; color: var(--text-muted); font-size: 12.5px;">
+        <div style="font-size: 32px; margin-bottom: 10px;">📂</div>
+        <p style="margin: 0; font-weight: 700; color: var(--text-main);">No hay recursos compartidos</p>
+        <p style="margin: 6px 0 0; font-size: 11.5px; opacity: 0.75; line-height: 1.4;">Cuando otros usuarios de Kortexa te compartan archivos o carpetas, aparecerán aquí agrupados.</p>
+      </div>
+    `;
+    return;
+  }
+
+  // Agrupar por propietario
+  const userGroups = {};
+  itemsToRender.forEach(item => {
+    const ownerId = item.owner.id;
+    if (!userGroups[ownerId]) {
+      userGroups[ownerId] = {
+        owner: item.owner,
+        items: []
+      };
+    }
+    userGroups[ownerId].items.push(item);
+  });
+
+  container.innerHTML = '';
+
+  Object.values(userGroups).forEach(group => {
+    const { owner, items } = group;
+    const isOnline = isUserOnline(owner.id) || !!owner.is_online;
+    if (isOnline) state.onlineUsers.add(owner.id);
+
+    // Expandir por defecto si está en estado abierto o si es la primera carga
+    const isExpanded = openSharedUserGroupsState.has(owner.id) || openSharedUserGroupsState.size === 0;
+    if (isExpanded) openSharedUserGroupsState.add(owner.id);
+
+    const card = document.createElement('div');
+    card.className = 'shared-user-group-card';
+    card.dataset.userId = owner.id;
+
+    const initial = (owner.username || 'U').charAt(0).toUpperCase();
+    const countLabel = items.length === 1 ? '1 recurso' : `${items.length} recursos`;
+
+    card.innerHTML = `
+      <div class="shared-user-group-header ${isExpanded ? 'open' : ''}">
+        <div class="shared-user-meta-left">
+          <div class="shared-user-avatar">
+            ${initial}
+            <span class="user-presence-dot ${isOnline ? 'online' : ''}" data-user-presence-id="${owner.id}" title="${isOnline ? 'En línea' : 'Desconectado'}"></span>
+          </div>
+          <div class="shared-user-names">
+            <span class="shared-user-displayname">${escapeHtml(owner.nombre_completo || owner.username)}</span>
+            <span class="shared-user-handle">@${escapeHtml(owner.username)}</span>
+          </div>
+        </div>
+        <div class="shared-user-meta-right">
+          <span class="shared-user-count-pill">${countLabel}</span>
+          <svg class="shared-user-chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+      </div>
+      <div class="shared-user-accordion-content" style="display: ${isExpanded ? 'block' : 'none'};">
+        <div class="shared-user-items-list"></div>
+      </div>
+    `;
+
+    const headerEl = card.querySelector('.shared-user-group-header');
+    const contentEl = card.querySelector('.shared-user-accordion-content');
+    const itemsListEl = card.querySelector('.shared-user-items-list');
+
+    headerEl.addEventListener('click', () => {
+      const currentlyOpen = contentEl.style.display !== 'none';
+      contentEl.style.display = currentlyOpen ? 'none' : 'block';
+      headerEl.classList.toggle('open', !currentlyOpen);
+      if (currentlyOpen) {
+        openSharedUserGroupsState.delete(owner.id);
+      } else {
+        openSharedUserGroupsState.add(owner.id);
+      }
+    });
+
+    items.forEach(item => {
+      const isWrite = item.permission === 'write';
+      const permIcon = isWrite ? '✍️' : '👁️';
+      const permTitle = isWrite ? 'Puede editar' : 'Solo lectura';
+
+      if (item.resource_type === 'folder') {
+        const folderWrapper = document.createElement('div');
+        folderWrapper.className = 'shared-folder-item';
+        folderWrapper.dataset.shareId = item.id;
+
+        const isFolderOpen = openSharedFoldersState.has(item.id);
+
+        folderWrapper.innerHTML = `
+          <div class="shared-resource-row ${isFolderOpen ? 'open' : ''}" style="margin-bottom: 2px;">
+            <div class="shared-resource-left">
+              <svg class="shared-folder-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="transform: ${isFolderOpen ? 'rotate(90deg)' : 'rotate(0deg)'}; transition: transform 0.15s ease; flex-shrink: 0;">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" style="flex-shrink: 0;">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+              <span class="shared-resource-title" title="${escapeHtml(item.resource_title)}">${escapeHtml(item.resource_title)}</span>
+            </div>
+            <span class="shared-resource-perm-tag" title="${permTitle}">${permIcon}</span>
+          </div>
+          <ul class="shared-folder-sublist" style="display: ${isFolderOpen ? 'block' : 'none'}; list-style: none; padding-left: 18px; margin: 2px 0 6px 0;"></ul>
+        `;
+
+        const folderRow = folderWrapper.querySelector('.shared-resource-row');
+        const sublistEl = folderWrapper.querySelector('.shared-folder-sublist');
+
+        folderRow.addEventListener('click', (e) => {
+          e.stopPropagation();
+          toggleSharedFolder(item, folderWrapper, folderRow, sublistEl);
+        });
+
+        if (isFolderOpen) {
+          fetchAndRenderSharedFolderFiles(item, sublistEl);
+        }
+
+        itemsListEl.appendChild(folderWrapper);
+      } else {
+        const fileRow = document.createElement('div');
+        fileRow.className = 'shared-resource-row shared-note-item';
+        fileRow.dataset.shareId = item.id;
+
+        const iconSvg = getSharedFileIconSvg(item.resource_path || item.resource_title);
+
+        fileRow.innerHTML = `
+          <div class="shared-resource-left" title="${escapeHtml(item.resource_title)}">
+            ${iconSvg}
+            <span class="shared-resource-title">${escapeHtml(item.resource_title)}</span>
+          </div>
+          <span class="shared-resource-perm-tag" title="${permTitle}">${permIcon}</span>
+        `;
+
+        fileRow.addEventListener('click', () => {
+          openSharedNote(item);
+        });
+
+        itemsListEl.appendChild(fileRow);
+      }
+    });
+
+    container.appendChild(card);
+  });
+}
+
+async function loadSharedWithMe() {
+  const countBadge = document.getElementById('shared-count-badge');
+  const totalBadge = document.getElementById('shared-sidebar-total-badge');
+  const leftContainer = document.getElementById('shared-with-me-container');
+
+  try {
+    const res = await fetch('/api/shares/shared-with-me');
+    if (!res.ok) return;
+    const data = await res.json();
+    allSharedWithMeItems = data.items || [];
+
+    if (countBadge) countBadge.textContent = allSharedWithMeItems.length;
+    if (totalBadge) {
+      totalBadge.textContent = allSharedWithMeItems.length;
+      totalBadge.style.display = allSharedWithMeItems.length > 0 ? 'inline-block' : 'none';
+    }
+
+    if (leftContainer) {
+      leftContainer.style.display = 'block';
+    }
+
+    const filterInput = document.getElementById('shared-drawer-filter-input');
+    const query = filterInput ? filterInput.value.trim().toLowerCase() : '';
+    const filtered = query
+      ? allSharedWithMeItems.filter(item =>
+          (item.resource_title || '').toLowerCase().includes(query) ||
+          (item.resource_path || '').toLowerCase().includes(query) ||
+          (item.owner?.username || '').toLowerCase().includes(query) ||
+          (item.owner?.nombre_completo || '').toLowerCase().includes(query)
+        )
+      : allSharedWithMeItems;
+
+    renderSharedUserGroups(filtered);
+  } catch (err) {
+    console.error('Error al cargar recursos compartidos conmigo:', err);
+  }
+}
+
+async function toggleSharedFolder(item, wrapper, header, sublist) {
+  const isCurrentlyOpen = openSharedFoldersState.has(item.id);
+  const chevron = header.querySelector('.shared-folder-chevron');
+
+  if (isCurrentlyOpen) {
+    openSharedFoldersState.delete(item.id);
+    header.classList.remove('open');
+    sublist.style.display = 'none';
+    if (chevron) chevron.style.transform = 'rotate(0deg)';
+  } else {
+    openSharedFoldersState.add(item.id);
+    header.classList.add('open');
+    sublist.style.display = 'block';
+    if (chevron) chevron.style.transform = 'rotate(90deg)';
+    await fetchAndRenderSharedFolderFiles(item, sublist);
+  }
+}
+
+async function fetchAndRenderSharedFolderFiles(item, sublist) {
+  try {
+    sublist.innerHTML = '<li style="padding: 4px 8px; font-size: 11px; color: var(--text-muted);">Cargando archivos...</li>';
+    const res = await fetch(`/api/shared-folders/tree?share_id=${item.id}`);
+    if (!res.ok) {
+      sublist.innerHTML = '<li style="padding: 4px 8px; font-size: 11px; color: var(--danger);">No se pudo cargar el contenido</li>';
+      return;
+    }
+    const data = await res.json();
+    const files = data.files || [];
+
+    if (files.length === 0) {
+      sublist.innerHTML = '<li style="padding: 4px 8px; font-size: 11px; color: var(--text-muted); font-style: italic;">Carpeta vacía</li>';
+      return;
+    }
+
+    sublist.innerHTML = '';
+    files.forEach(f => {
+      const subLi = document.createElement('li');
+      subLi.className = 'shared-folder-subitem';
+      subLi.dataset.shareId = item.id;
+      subLi.dataset.filename = f.filename;
+
+      subLi.innerHTML = `
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink: 0; color: #a5b4fc;">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+        </svg>
+        <span class="shared-subitem-title" title="${escapeHtml(f.title || f.filename)}">${escapeHtml(f.title || f.filename)}</span>
+      `;
+
+      subLi.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openSharedFolderFile(item, f);
+      });
+
+      sublist.appendChild(subLi);
+    });
+  } catch (err) {
+    console.error('Error al obtener archivos de carpeta compartida:', err);
+    sublist.innerHTML = '<li style="padding: 4px 8px; font-size: 11px; color: var(--danger);">Error de conexión</li>';
+  }
+}
+
+async function openSharedFolderFile(folderShare, file, providedPassword = null) {
+  try {
+    const headers = {};
+    if (providedPassword) headers['x-vault-password'] = providedPassword;
+
+    const res = await fetch(`/api/shared-notes/read?share_id=${folderShare.id}&sub_path=${encodeURIComponent(file.filename)}`, { headers });
+    if (!res.ok) {
+      const err = await res.json();
+      if (res.status === 423 || err.locked) {
+        const pwd = await showPromptModal({
+          title: 'Bóveda Compartida Cifrada (AES-256)',
+          message: `El archivo "${file.title || file.filename}" pertenece a una bóveda cifrada de @${folderShare.owner?.username || 'propietario'}.\nIngrese la contraseña de la bóveda para descifrarlo:`,
+          placeholder: 'Contraseña de la bóveda...',
+          defaultValue: '',
+          confirmText: 'Desbloquear y Abrir',
+          cancelText: 'Cancelar'
+        });
+        if (!pwd) return;
+        return openSharedFolderFile(folderShare, file, pwd);
+      }
+      showToast(err.error || 'No se pudo abrir el archivo', 'danger');
+      return;
+    }
+    const data = await res.json();
+    const isMedia = data.file_type && data.file_type !== 'note';
+
+    state.activeNote = {
+      isSharedWithMe: true,
+      shareId: folderShare.id,
+      subPath: file.filename,
+      title: data.title || file.title || file.filename,
+      name: file.filename,
+      filename: `${folderShare.resource_title}/${file.filename}`,
+      folder: `${folderShare.resource_title} (@${folderShare.owner.username})`,
+      permission: folderShare.permission,
+      content: data.content || '',
+      type: data.file_type || (data.resource_type === 'file' ? 'note' : data.resource_type),
+      ext: data.ext,
+      size: data.size || 0,
+      url: data.url
+    };
+
+    titleInputEl.value = data.title;
+    titleInputEl.readOnly = isMedia || folderShare.permission !== 'write';
+    noteFolderName.textContent = `${folderShare.resource_title} (@${folderShare.owner.username})`;
+
+    if (isMedia) {
+      if (editorWorkspaceEl) editorWorkspaceEl.style.display = 'none';
+      if (modeTogglesEl) modeTogglesEl.style.display = 'none';
+      if (saveStatusContainerEl) saveStatusContainerEl.style.display = 'none';
+      if (markdownToolbarEl) markdownToolbarEl.style.display = 'none';
+      if (mediaViewerWorkspaceEl) mediaViewerWorkspaceEl.style.display = 'flex';
+      renderMediaViewer(state.activeNote);
+    } else {
+      if (mediaViewerWorkspaceEl) mediaViewerWorkspaceEl.style.display = 'none';
+      if (editorWorkspaceEl) editorWorkspaceEl.style.display = '';
+      if (modeTogglesEl) modeTogglesEl.style.display = 'flex';
+      if (saveStatusContainerEl) saveStatusContainerEl.style.display = 'flex';
+      if (markdownToolbarEl) {
+        markdownToolbarEl.style.display = (folderShare.permission === 'write' && !(editorWorkspaceEl && editorWorkspaceEl.classList.contains('preview-mode'))) ? 'flex' : 'none';
+      }
+      markdownInputEl.value = data.content || '';
+      markdownInputEl.readOnly = folderShare.permission !== 'write';
+      renderMarkdown();
+      setSaveStatus(folderShare.permission === 'write' ? 'Guardado' : 'Solo Lectura');
+    }
+
+    // Cambiar a vista de editor si estábamos en grafo
+    const viewEditor = document.getElementById('view-editor');
+    const viewGraph = document.getElementById('view-graph');
+    const navEditor = document.getElementById('nav-editor');
+    const navGraph = document.getElementById('nav-graph');
+    if (viewEditor && viewGraph) {
+      viewEditor.classList.add('active');
+      viewGraph.classList.remove('active');
+      navEditor?.classList.add('active');
+      navGraph?.classList.remove('active');
+      state.activeTab = 'editor';
+    }
+
+    // Resaltar en lista de compartidos
+    document.querySelectorAll('.shared-folder-subitem').forEach(el => {
+      const match = el.dataset.shareId === String(folderShare.id) && el.dataset.filename === file.filename;
+      el.classList.toggle('active', match);
+    });
+    document.querySelectorAll('.shared-note-item').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.tree-item').forEach(el => el.classList.remove('active'));
+
+    showToast(`Archivo "${file.title || file.filename}" abierto (${folderShare.permission === 'write' ? 'Edición permitida' : 'Solo lectura'})`, 'info');
+  } catch (err) {
+    showToast('Error al abrir archivo de la carpeta compartida', 'danger');
+  }
+}
+
+async function openSharedNote(item, providedPassword = null) {
+  try {
+    const headers = {};
+    if (providedPassword) headers['x-vault-password'] = providedPassword;
+
+    const res = await fetch(`/api/shared-notes/read?share_id=${item.id}`, { headers });
+    if (!res.ok) {
+      const err = await res.json();
+      if (res.status === 423 || err.locked) {
+        const pwd = await showPromptModal({
+          title: 'Recurso Cifrado (AES-256)',
+          message: `La nota "${item.resource_title || 'Nota'}" pertenece a una bóveda cifrada de @${item.owner?.username || 'propietario'}.\nIngrese la contraseña de la bóveda para descifrarla:`,
+          placeholder: 'Contraseña de la bóveda...',
+          defaultValue: '',
+          confirmText: 'Desbloquear y Abrir',
+          cancelText: 'Cancelar'
+        });
+        if (!pwd) return;
+        return openSharedNote(item, pwd);
+      }
+      showToast(err.error || 'No se pudo abrir el recurso compartido', 'danger');
+      return;
+    }
+    const data = await res.json();
+    const isMedia = data.file_type && data.file_type !== 'note';
+
+    state.activeNote = {
+      isSharedWithMe: true,
+      shareId: data.shareId,
+      subPath: '',
+      title: data.title,
+      name: data.filename,
+      filename: data.filename,
+      folder: `Compartido por @${data.owner.username}`,
+      permission: data.permission,
+      content: data.content || '',
+      type: data.file_type || (data.resource_type === 'file' ? 'note' : data.resource_type),
+      ext: data.ext,
+      size: data.size || 0,
+      url: data.url
+    };
+
+    titleInputEl.value = data.title;
+    titleInputEl.readOnly = isMedia || data.permission !== 'write';
+    noteFolderName.textContent = `Compartido por @${data.owner.username}`;
+
+    if (isMedia) {
+      if (editorWorkspaceEl) editorWorkspaceEl.style.display = 'none';
+      if (modeTogglesEl) modeTogglesEl.style.display = 'none';
+      if (saveStatusContainerEl) saveStatusContainerEl.style.display = 'none';
+      if (markdownToolbarEl) markdownToolbarEl.style.display = 'none';
+      if (mediaViewerWorkspaceEl) mediaViewerWorkspaceEl.style.display = 'flex';
+      renderMediaViewer(state.activeNote);
+    } else {
+      if (mediaViewerWorkspaceEl) mediaViewerWorkspaceEl.style.display = 'none';
+      if (editorWorkspaceEl) editorWorkspaceEl.style.display = '';
+      if (modeTogglesEl) modeTogglesEl.style.display = 'flex';
+      if (saveStatusContainerEl) saveStatusContainerEl.style.display = 'flex';
+      if (markdownToolbarEl) {
+        markdownToolbarEl.style.display = (data.permission === 'write' && !(editorWorkspaceEl && editorWorkspaceEl.classList.contains('preview-mode'))) ? 'flex' : 'none';
+      }
+      markdownInputEl.value = data.content || '';
+      markdownInputEl.readOnly = data.permission !== 'write';
+      renderMarkdown();
+      setSaveStatus(data.permission === 'write' ? 'Guardado' : 'Solo Lectura');
+    }
+
+    // Cambiar a vista de editor si estábamos en grafo
+    const viewEditor = document.getElementById('view-editor');
+    const viewGraph = document.getElementById('view-graph');
+    const navEditor = document.getElementById('nav-editor');
+    const navGraph = document.getElementById('nav-graph');
+    if (viewEditor && viewGraph) {
+      viewEditor.classList.add('active');
+      viewGraph.classList.remove('active');
+      navEditor?.classList.add('active');
+      navGraph?.classList.remove('active');
+      state.activeTab = 'editor';
+    }
+
+    // Resaltar en lista de compartidos
+    document.querySelectorAll('.shared-note-item').forEach(el => {
+      el.classList.toggle('active', el.dataset.shareId === String(item.id));
+    });
+    document.querySelectorAll('.shared-folder-subitem').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.tree-item').forEach(el => el.classList.remove('active'));
+
+    showToast(`Nota compartida abierta (${data.permission === 'write' ? 'Edición permitida' : 'Solo lectura'})`, 'info');
+  } catch (err) {
+    showToast('Error al abrir la nota compartida', 'danger');
+  }
+}
+
+function setupSharedDrawerEventListeners() {
+  const btnTrigger = document.getElementById('btn-toggle-shared-drawer');
+  const btnClose = document.getElementById('btn-close-shared-sidebar');
+  const filterInput = document.getElementById('shared-drawer-filter-input');
+
+  btnTrigger?.addEventListener('click', () => {
+    const drawer = document.getElementById('shared-with-me-sidebar');
+    const isOpen = drawer && drawer.style.display !== 'none';
+    toggleSharedDrawer(!isOpen);
+  });
+
+  btnClose?.addEventListener('click', () => {
+    toggleSharedDrawer(false);
+  });
+
+  filterInput?.addEventListener('input', (e) => {
+    const query = e.target.value.trim().toLowerCase();
+    const filtered = query
+      ? allSharedWithMeItems.filter(item =>
+          (item.resource_title || '').toLowerCase().includes(query) ||
+          (item.resource_path || '').toLowerCase().includes(query) ||
+          (item.owner?.username || '').toLowerCase().includes(query) ||
+          (item.owner?.nombre_completo || '').toLowerCase().includes(query)
+        )
+      : allSharedWithMeItems;
+    renderSharedUserGroups(filtered);
+  });
+}
+
+function setupShareModalEventListeners() {
+  const btnShare = document.getElementById('btn-share-note');
+  const modal = document.getElementById('share-modal');
+  const btnClose = document.getElementById('btn-close-share-modal');
+  const btnCloseFooter = document.getElementById('btn-close-share-modal-footer');
+  const tabBtnPublic = document.getElementById('share-tab-btn-public');
+  const tabBtnUsers = document.getElementById('share-tab-btn-users');
+  const panelPublic = document.getElementById('share-panel-public');
+  const panelUsers = document.getElementById('share-panel-users');
+  
+  const togglePublic = document.getElementById('toggle-public-link');
+  const publicLinkDetails = document.getElementById('public-link-details');
+  const shareUrlInput = document.getElementById('share-url-input');
+  const btnCopyUrl = document.getElementById('btn-copy-share-url');
+  const copyUrlText = document.getElementById('copy-share-url-text');
+  
+  const chkPassword = document.getElementById('chk-share-password');
+  const passwordField = document.getElementById('share-password-field');
+  const inputPassword = document.getElementById('input-share-password');
+  
+  const chkExpiry = document.getElementById('chk-share-expiry');
+  const expiryField = document.getElementById('share-expiry-field');
+  const inputExpiry = document.getElementById('input-share-expiry');
+  const btnSavePublicSettings = document.getElementById('btn-save-public-settings');
+  let shareModalHasExistingPassword = false;
+
+  const userSearchInput = document.getElementById('share-user-search-input');
+  const usersDropdown = document.getElementById('share-users-dropdown');
+  const permissionSelect = document.getElementById('share-user-permission-select');
+  const btnAddUserShare = document.getElementById('btn-add-user-share');
+  const membersList = document.getElementById('share-members-list');
+  const usersCountBadge = document.getElementById('share-users-count');
+
+  if (!modal) return;
+
+  function openShareModalForResource(customResource) {
+    if (!customResource) {
+      if (!state.activeNote || !state.activeNote.filename) {
+        showToast('Abre o crea una nota primero para poder compartirla', 'warning');
+        return;
+      }
+      if (state.activeNote.isSharedWithMe) {
+        showToast('Este recurso fue compartido contigo. Solo el propietario puede administrar los accesos.', 'info');
+        return;
+      }
+      customResource = {
+        path: state.activeNote.filename,
+        title: state.activeNote.title || state.activeNote.name || 'Documento',
+        type: state.activeNote.type || 'file'
+      };
+    }
+
+    shareModalCurrentResource = customResource;
+
+    const modalTitleEl = document.getElementById('share-modal-title');
+    const modalSubtitleEl = document.getElementById('share-modal-subtitle');
+
+    if (customResource.type === 'vault') {
+      modalTitleEl.textContent = `Compartir Bóveda: ${customResource.title}`;
+      modalSubtitleEl.textContent = 'Acceso a toda la bóveda (todos los archivos y subcarpetas)';
+    } else if (customResource.type === 'folder') {
+      modalTitleEl.textContent = `Compartir Carpeta: ${customResource.title}`;
+      modalSubtitleEl.textContent = `Carpeta: ${customResource.path}`;
+    } else {
+      modalTitleEl.textContent = `Compartir: ${customResource.title}`;
+      modalSubtitleEl.textContent = `Archivo: ${customResource.path}`;
+    }
+
+    // Resetear formulario de usuario
+    shareModalSelectedTargetUser = null;
+    if (userSearchInput) userSearchInput.value = '';
+    if (btnAddUserShare) btnAddUserShare.disabled = true;
+    if (usersDropdown) {
+      usersDropdown.style.display = 'none';
+      usersDropdown.innerHTML = '';
+    }
+
+    // Resetear a pestaña inicial (Enlace Público)
+    tabBtnPublic?.classList.add('active');
+    tabBtnUsers?.classList.remove('active');
+    panelPublic?.classList.add('active');
+    panelUsers?.classList.remove('active');
+    if (panelPublic) panelPublic.style.display = 'flex';
+    if (panelUsers) panelUsers.style.display = 'none';
+
+    modal.classList.add('active');
+    modal.setAttribute('aria-hidden', 'false');
+
+    loadResourceShares();
+  }
+
+  // Exponer globalmente
+  window.openShareModalForResource = openShareModalForResource;
+
+  function closeShareModal() {
+    modal.classList.remove('active');
+    modal.setAttribute('aria-hidden', 'true');
+    shareModalCurrentResource = null;
+    shareModalSelectedTargetUser = null;
+  }
+
+  btnShare?.addEventListener('click', () => openShareModalForResource());
+  btnClose?.addEventListener('click', closeShareModal);
+  btnCloseFooter?.addEventListener('click', closeShareModal);
+
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeShareModal();
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.classList.contains('active')) {
+      closeShareModal();
+    }
+  });
+
+  // Cambio de pestañas
+  tabBtnPublic?.addEventListener('click', () => {
+    tabBtnPublic.classList.add('active');
+    tabBtnUsers.classList.remove('active');
+    panelPublic?.classList.add('active');
+    panelUsers?.classList.remove('active');
+    if (panelPublic) panelPublic.style.display = 'flex';
+    if (panelUsers) panelUsers.style.display = 'none';
+  });
+
+  tabBtnUsers?.addEventListener('click', () => {
+    tabBtnUsers.classList.add('active');
+    tabBtnPublic.classList.remove('active');
+    panelUsers?.classList.add('active');
+    panelPublic?.classList.remove('active');
+    if (panelUsers) panelUsers.style.display = 'flex';
+    if (panelPublic) panelPublic.style.display = 'none';
+  });
+
+  // Cargar estado actual de compartición
+  async function loadResourceShares() {
+    if (!shareModalCurrentResource) return;
+    try {
+      const res = await fetch(`/api/shares/resource?path=${encodeURIComponent(shareModalCurrentResource.path)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+
+      // 1. Enlace público
+      if (data.publicShare) {
+        togglePublic.checked = true;
+        publicLinkDetails.style.display = 'block';
+        const fullUrl = `${window.location.origin}/s/${data.publicShare.share_token}`;
+        shareUrlInput.value = fullUrl;
+
+        shareModalHasExistingPassword = Boolean(data.publicShare.has_password);
+        chkPassword.checked = shareModalHasExistingPassword;
+        passwordField.style.display = shareModalHasExistingPassword ? 'block' : 'none';
+        inputPassword.value = '';
+        if (shareModalHasExistingPassword) {
+          inputPassword.placeholder = '•••••••• (Escribe para cambiar la clave)';
+        } else {
+          inputPassword.placeholder = 'Escribe una contraseña para el enlace...';
+        }
+
+        chkExpiry.checked = Boolean(data.publicShare.expires_at);
+        expiryField.style.display = data.publicShare.expires_at ? 'block' : 'none';
+        if (data.publicShare.expires_at) {
+          inputExpiry.value = data.publicShare.expires_at.split('T')[0];
+        } else {
+          inputExpiry.value = '';
+        }
+      } else {
+        togglePublic.checked = false;
+        publicLinkDetails.style.display = 'none';
+        shareUrlInput.value = '';
+        shareModalHasExistingPassword = false;
+        chkPassword.checked = false;
+        passwordField.style.display = 'none';
+        inputPassword.value = '';
+        inputPassword.placeholder = 'Escribe una contraseña para el enlace...';
+        chkExpiry.checked = false;
+        expiryField.style.display = 'none';
+        inputExpiry.value = '';
+      }
+
+      // 2. Usuarios compartidos
+      renderUserSharesList(data.userShares || []);
+    } catch (err) {
+      console.error('Error al cargar datos de recurso compartido:', err);
+    }
+  }
+
+  // Toggle enlace público
+  togglePublic?.addEventListener('change', async () => {
+    if (!shareModalCurrentResource) return;
+    const enable = togglePublic.checked;
+
+    try {
+      const res = await fetch('/api/shares/public', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enable,
+          path: shareModalCurrentResource.path,
+          title: shareModalCurrentResource.title,
+          resource_type: shareModalCurrentResource.type
+        })
+      });
+      const data = await res.json();
+      if (data.enabled) {
+        publicLinkDetails.style.display = 'block';
+        shareUrlInput.value = `${window.location.origin}/s/${data.share_token}`;
+        showToast('Enlace público generado y activado', 'success');
+      } else {
+        publicLinkDetails.style.display = 'none';
+        shareUrlInput.value = '';
+        showToast('Enlace público desactivado', 'info');
+      }
+    } catch (err) {
+      showToast('Error al modificar enlace público', 'danger');
+      togglePublic.checked = !enable;
+    }
+  });
+
+  // Copiar URL pública
+  btnCopyUrl?.addEventListener('click', () => {
+    if (!shareUrlInput.value) return;
+    navigator.clipboard.writeText(shareUrlInput.value).then(() => {
+      copyUrlText.textContent = '¡Copiado!';
+      setTimeout(() => copyUrlText.textContent = 'Copiar', 2000);
+      showToast('Enlace copiado al portapapeles', 'info');
+    });
+  });
+
+  // Checkbox contraseña
+  chkPassword?.addEventListener('change', () => {
+    passwordField.style.display = chkPassword.checked ? 'block' : 'none';
+    if (!chkPassword.checked) {
+      inputPassword.value = '';
+    } else {
+      setTimeout(() => inputPassword?.focus(), 50);
+    }
+  });
+
+  // Toggle visibilidad contraseña
+  const btnToggleSharePwd = document.getElementById('btn-toggle-share-pwd-visibility');
+  btnToggleSharePwd?.addEventListener('click', () => {
+    if (!inputPassword) return;
+    const isPwd = inputPassword.type === 'password';
+    inputPassword.type = isPwd ? 'text' : 'password';
+    const eyeIcon = document.getElementById('icon-share-pwd-eye');
+    if (eyeIcon) {
+      eyeIcon.innerHTML = isPwd
+        ? '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>'
+        : '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+    }
+  });
+
+  // Checkbox expiración
+  chkExpiry?.addEventListener('change', () => {
+    expiryField.style.display = chkExpiry.checked ? 'block' : 'none';
+    if (!chkExpiry.checked) inputExpiry.value = '';
+    else setTimeout(() => inputExpiry?.focus(), 50);
+  });
+
+  // Guardar opciones de contraseña / expiración para enlace público
+  btnSavePublicSettings?.addEventListener('click', async () => {
+    if (!shareModalCurrentResource) return;
+
+    // VALIDACIÓN 1: CONTRASEÑA CONTRA VACÍOS Y LONGITUD MÍNIMA
+    let pwdPayload = undefined;
+    if (chkPassword.checked) {
+      const rawPwd = inputPassword.value.trim();
+      if (!rawPwd) {
+        if (!shareModalHasExistingPassword) {
+          showToast('Por favor, ingresa una contraseña para proteger el enlace.', 'warning');
+          inputPassword.focus();
+          return;
+        }
+        // Si ya tenía contraseña previa y no escribió una nueva, la conserva intacta
+        pwdPayload = undefined;
+      } else {
+        if (rawPwd.length < 3) {
+          showToast('La contraseña del enlace debe tener al menos 3 caracteres.', 'warning');
+          inputPassword.focus();
+          return;
+        }
+        pwdPayload = rawPwd;
+      }
+    } else {
+      // Toggle apagado -> eliminar protección de contraseña
+      pwdPayload = null;
+    }
+
+    // VALIDACIÓN 2: FECHA DE EXPIRACIÓN CONTRA VACÍOS Y FECHAS EN EL PASADO
+    let expPayload = null;
+    if (chkExpiry.checked) {
+      const rawExp = inputExpiry.value;
+      if (!rawExp) {
+        showToast('Por favor, selecciona una fecha de expiración para el enlace.', 'warning');
+        inputExpiry.focus();
+        return;
+      }
+      const expDate = new Date(rawExp + 'T23:59:59');
+      const now = new Date();
+      if (expDate < now) {
+        showToast('La fecha de expiración debe ser una fecha futura.', 'warning');
+        inputExpiry.focus();
+        return;
+      }
+      expPayload = rawExp;
+    } else {
+      // Toggle apagado -> sin expiración
+      expPayload = null;
+    }
+
+    const saveBtnText = document.getElementById('btn-save-public-settings-text');
+    const originalText = saveBtnText ? saveBtnText.textContent : 'Guardar Opciones de Enlace';
+    if (saveBtnText) saveBtnText.textContent = 'Guardando...';
+    btnSavePublicSettings.disabled = true;
+
+    try {
+      const bodyPayload = {
+        enable: true,
+        path: shareModalCurrentResource.path,
+        title: shareModalCurrentResource.title,
+        resource_type: shareModalCurrentResource.type,
+        expires_at: expPayload
+      };
+      if (pwdPayload !== undefined) {
+        bodyPayload.password = pwdPayload;
+      }
+
+      const res = await fetch('/api/shares/public', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bodyPayload)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (pwdPayload !== undefined) {
+          shareModalHasExistingPassword = Boolean(pwdPayload);
+          if (shareModalHasExistingPassword) {
+            inputPassword.placeholder = '•••••••• (Escribe para cambiar la clave)';
+            inputPassword.value = '';
+          }
+        }
+        if (saveBtnText) saveBtnText.textContent = '¡Opciones Guardadas!';
+        btnSavePublicSettings.classList.add('saved');
+        showToast('Opciones de seguridad del enlace guardadas', 'success');
+        setTimeout(() => {
+          if (saveBtnText) saveBtnText.textContent = originalText;
+          btnSavePublicSettings.classList.remove('saved');
+          btnSavePublicSettings.disabled = false;
+        }, 2200);
+      } else {
+        if (saveBtnText) saveBtnText.textContent = originalText;
+        btnSavePublicSettings.disabled = false;
+        showToast(data.error || 'Error al guardar opciones del enlace', 'danger');
+      }
+    } catch {
+      if (saveBtnText) saveBtnText.textContent = originalText;
+      btnSavePublicSettings.disabled = false;
+      showToast('Error al guardar opciones del enlace', 'danger');
+    }
+  });
+
+  // Búsqueda de usuarios
+  userSearchInput?.addEventListener('input', (e) => {
+    const val = e.target.value.trim();
+    clearTimeout(shareUserSearchDebounce);
+    shareModalSelectedTargetUser = null;
+    btnAddUserShare.disabled = true;
+
+    if (!val) {
+      usersDropdown.style.display = 'none';
+      usersDropdown.innerHTML = '';
+      return;
+    }
+
+    shareUserSearchDebounce = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/users/search?q=${encodeURIComponent(val)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const users = data.users || [];
+
+        if (users.length === 0) {
+          usersDropdown.innerHTML = '<div style="padding: 10px; font-size: 12px; color: var(--text-muted); text-align: center;">No se encontraron usuarios</div>';
+          usersDropdown.style.display = 'block';
+          return;
+        }
+
+        usersDropdown.innerHTML = '';
+        users.forEach(u => {
+          const isOnline = isUserOnline(u.id) || !!u.is_online;
+          if (isOnline) state.onlineUsers.add(u.id);
+
+          const item = document.createElement('div');
+          item.className = 'share-user-option';
+          item.innerHTML = `
+            <div class="share-user-avatar-wrap">
+              <div class="share-user-avatar">${(u.username || 'U')[0].toUpperCase()}</div>
+              <span class="user-presence-dot avatar-badge ${isOnline ? 'online' : ''}" data-user-presence-id="${u.id}" title="${isOnline ? 'En línea' : 'Desconectado'}"></span>
+            </div>
+            <div class="share-user-details">
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span class="share-user-fullname">${escapeHtml(u.nombre_completo || u.username)}</span>
+                <span class="presence-badge ${isOnline ? 'online' : ''}" data-user-presence-text-id="${u.id}">${isOnline ? 'En línea' : 'Desconectado'}</span>
+              </div>
+              <span class="share-user-handle">@${escapeHtml(u.username)} • ${escapeHtml(u.email)}</span>
+            </div>
+          `;
+          item.addEventListener('click', () => {
+            shareModalSelectedTargetUser = u;
+            userSearchInput.value = `@${u.username} (${u.nombre_completo || u.username})`;
+            usersDropdown.style.display = 'none';
+            btnAddUserShare.disabled = false;
+          });
+          usersDropdown.appendChild(item);
+        });
+
+        usersDropdown.style.display = 'block';
+      } catch (err) {
+        console.error('Error buscando usuarios:', err);
+      }
+    }, 200);
+  });
+
+  // Cerrar dropdown si se hace clic fuera
+  document.addEventListener('click', (e) => {
+    if (!usersDropdown.contains(e.target) && e.target !== userSearchInput) {
+      usersDropdown.style.display = 'none';
+    }
+  });
+
+  // Compartir con usuario
+  btnAddUserShare?.addEventListener('click', async () => {
+    if (!shareModalCurrentResource || !shareModalSelectedTargetUser) return;
+    const perm = permissionSelect.value || 'read';
+
+    try {
+      const res = await fetch('/api/shares/user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: shareModalCurrentResource.path,
+          title: shareModalCurrentResource.title,
+          resource_type: shareModalCurrentResource.type,
+          target_user_id: shareModalSelectedTargetUser.id,
+          permission: perm
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || 'Error al compartir con el usuario', 'danger');
+        return;
+      }
+
+      showToast(`Compartido con @${shareModalSelectedTargetUser.username}`, 'success');
+      userSearchInput.value = '';
+      shareModalSelectedTargetUser = null;
+      btnAddUserShare.disabled = true;
+
+      renderUserSharesList(data.userShares || []);
+    } catch (err) {
+      showToast('Error de red al compartir con el usuario', 'danger');
+    }
+  });
+
+  function renderUserSharesList(shares) {
+    if (!membersList) return;
+    if (usersCountBadge) {
+      usersCountBadge.textContent = shares.length;
+      usersCountBadge.style.display = shares.length > 0 ? 'inline-block' : 'none';
+    }
+
+    if (shares.length === 0) {
+      membersList.innerHTML = '<div style="padding: 12px; font-size: 12.5px; color: var(--text-muted); text-align: center;">Este recurso aún no se ha compartido con ningún usuario.</div>';
+      return;
+    }
+
+    membersList.innerHTML = '';
+    shares.forEach(s => {
+      const isOnline = isUserOnline(s.user.id) || !!s.user.is_online;
+      if (isOnline) state.onlineUsers.add(s.user.id);
+
+      const row = document.createElement('div');
+      row.className = 'share-member-row';
+
+      const isWrite = s.permission === 'write';
+      const permLabel = isWrite ? '✍️ Puede editar' : '👁️ Solo lectura';
+      const permClass = isWrite ? 'write' : 'read';
+
+      row.innerHTML = `
+        <div class="share-member-left">
+          <div class="share-user-avatar-wrap">
+            <div class="share-user-avatar" style="width: 26px; height: 26px; font-size: 11px;">
+              ${(s.user.username || 'U')[0].toUpperCase()}
+            </div>
+            <span class="user-presence-dot avatar-badge ${isOnline ? 'online' : ''}" data-user-presence-id="${s.user.id}" title="${isOnline ? 'En línea' : 'Desconectado'}"></span>
+          </div>
+          <div class="share-user-details">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span class="share-user-fullname" style="font-size: 12.5px;">${escapeHtml(s.user.nombre_completo || s.user.username)}</span>
+              <span class="presence-badge ${isOnline ? 'online' : ''}" data-user-presence-text-id="${s.user.id}">${isOnline ? 'En línea' : 'Desconectado'}</span>
+            </div>
+            <span class="share-user-handle" style="font-size: 10.5px;">@${escapeHtml(s.user.username)}</span>
+          </div>
+        </div>
+        <div class="share-member-right">
+          <span class="share-perm-badge ${permClass}">${permLabel}</span>
+          <button type="button" class="share-revoke-btn" title="Revocar acceso a este usuario">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+      `;
+
+      const revokeBtn = row.querySelector('.share-revoke-btn');
+      revokeBtn.addEventListener('click', async () => {
+        try {
+          const res = await fetch(`/api/shares/${s.id}`, { method: 'DELETE' });
+          if (res.ok) {
+            showToast(`Acceso revocado a @${s.user.username}`, 'info');
+            loadResourceShares();
+          }
+        } catch {
+          showToast('Error al revocar acceso', 'danger');
+        }
+      });
+
+      membersList.appendChild(row);
+    });
+  }
+}
+
+// ==========================================
+// CANAL WEBSOCKET EN TIEMPO REAL (NOTIFICACIONES & SYNC)
+// ==========================================
+let wsClient = null;
+let wsReconnectTimeout = null;
+let wsReconnectAttempts = 0;
+
+function playNotificationChime() {
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.12); // A5
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.35);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.36);
+  } catch {}
+}
+
+function updateRealtimeStatus(online) {
+  const dot = document.getElementById('realtime-status-dot');
+  if (dot) {
+    dot.classList.toggle('online', online);
+    const perm = ('Notification' in window) ? Notification.permission : 'no-soporte';
+    const permText = perm === 'granted' ? ' (Notificaciones de escritorio activas)' : ' (Haz clic para activar notificaciones de escritorio)';
+    dot.title = online ? `Canal en tiempo real conectado${permText}` : 'Canal en tiempo real desconectado';
+  }
+}
+
+function isUserOnline(userId) {
+  if (!userId) return false;
+  const uid = parseInt(userId, 10);
+  return state.onlineUsers instanceof Set && state.onlineUsers.has(uid);
+}
+
+function updateAllPresenceIndicators() {
+  document.querySelectorAll('[data-user-presence-id]').forEach(el => {
+    const uid = parseInt(el.dataset.userPresenceId, 10);
+    const isOnline = isUserOnline(uid);
+    el.classList.toggle('online', isOnline);
+    el.title = isOnline ? 'En línea' : 'Desconectado';
+  });
+  document.querySelectorAll('[data-user-presence-text-id]').forEach(el => {
+    const uid = parseInt(el.dataset.userPresenceTextId, 10);
+    const isOnline = isUserOnline(uid);
+    el.textContent = isOnline ? 'En línea' : 'Desconectado';
+    el.classList.toggle('online', isOnline);
+  });
+}
+
+// ==========================================
+// NOTIFICACIONES DE ESCRITORIO (SISTEMA OPERATIVO)
+// ==========================================
+async function requestDesktopNotificationPermission(notifyUser = false) {
+  if (!('Notification' in window)) return false;
+
+  if (Notification.permission === 'default') {
+    try {
+      const res = await Notification.requestPermission();
+      if (res === 'granted' && notifyUser) {
+        showToast('🔔 Notificaciones del sistema operativo activadas para Kortexa', 'success');
+      } else if (res === 'denied' && notifyUser) {
+        showToast('Notificaciones de escritorio bloqueadas. Permítelas desde el icono del candado en la barra de direcciones.', 'warning', 7000);
+      }
+      checkChatNotificationBanner();
+      updateRealtimeStatus(Boolean(wsClient && wsClient.readyState === WebSocket.OPEN));
+      return res === 'granted';
+    } catch {
+      return false;
+    }
+  }
+  return Notification.permission === 'granted';
+}
+
+function showDesktopNotification({ title, body, icon = '/favicon.svg', tag = null, onClick = null }) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+
+  try {
+    const notif = new Notification(title, {
+      body,
+      icon,
+      badge: icon,
+      silent: false,
+      tag: tag || ('kortexa-msg-' + Date.now())
+    });
+
+    notif.onclick = () => {
+      try {
+        window.focus();
+      } catch {}
+      if (typeof onClick === 'function') {
+        onClick();
+      }
+      notif.close();
+    };
+  } catch (err) {
+    console.warn('Error mostrando notificación nativa del SO:', err);
+  }
+}
+
+function initWebSocketManager() {
+  if (wsClient && (wsClient.readyState === WebSocket.OPEN || wsClient.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+  try {
+    wsClient = new WebSocket(wsUrl);
+
+    wsClient.onopen = () => {
+      wsReconnectAttempts = 0;
+      updateRealtimeStatus(true);
+      // Solicitar permiso de notificaciones de escritorio si aún no se ha decidido
+      if ('Notification' in window && Notification.permission === 'default') {
+        requestDesktopNotificationPermission(false);
+      }
+    };
+
+    // Permitir clic en el punto indicador para activar o verificar notificaciones
+    const dotEl = document.getElementById('realtime-status-dot');
+    if (dotEl && !dotEl.dataset.hasClickListener) {
+      dotEl.dataset.hasClickListener = 'true';
+      dotEl.style.cursor = 'pointer';
+      dotEl.addEventListener('click', () => {
+        if (!('Notification' in window)) {
+          showToast('Tu navegador no soporta notificaciones de escritorio', 'warning');
+          return;
+        }
+        if (Notification.permission === 'default') {
+          requestDesktopNotificationPermission(true);
+        } else if (Notification.permission === 'granted') {
+          showDesktopNotification({
+            title: 'Kortexa — Notificaciones Activas',
+            body: 'Las notificaciones del sistema operativo están funcionando correctamente.'
+          });
+          showToast('Notificaciones del sistema operativo activas', 'info');
+        } else {
+          showToast('Notificaciones bloqueadas en la configuración del navegador', 'warning');
+        }
+      });
+    }
+
+    wsClient.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'CONNECTED' && msg.data && Array.isArray(msg.data.onlineUserIds)) {
+          state.onlineUsers = new Set(msg.data.onlineUserIds.map(Number));
+          updateAllPresenceIndicators();
+        }
+        handleRealtimeEvent(msg);
+      } catch (err) {
+        console.error('Error parseando mensaje WebSocket:', err);
+      }
+    };
+
+    wsClient.onclose = (e) => {
+      updateRealtimeStatus(false);
+      // Código 4001: no autenticado
+      if (e.code === 4001) return;
+
+      const delay = Math.min(1000 * Math.pow(1.5, wsReconnectAttempts), 15000);
+      wsReconnectAttempts++;
+      clearTimeout(wsReconnectTimeout);
+      wsReconnectTimeout = setTimeout(() => {
+        initWebSocketManager();
+      }, delay);
+    };
+
+    wsClient.onerror = () => {
+      updateRealtimeStatus(false);
+    };
+  } catch (err) {
+    console.error('Error al inicializar WebSocket:', err);
+  }
+}
+
+function handleRealtimeEvent(msg) {
+  if (!msg || !msg.type) return;
+
+  switch (msg.type) {
+    case 'USER_STATUS_CHANGED': {
+      const { userId, online } = msg.data;
+      const uid = parseInt(userId, 10);
+      if (online) {
+        state.onlineUsers.add(uid);
+      } else {
+        state.onlineUsers.delete(uid);
+      }
+      updateAllPresenceIndicators();
+      break;
+    }
+
+    case 'SHARE_RECEIVED': {
+      const { title, resource_type, permission, owner } = msg.data;
+      playNotificationChime();
+
+      const typeLabel = resource_type === 'vault' ? 'la bóveda' : (resource_type === 'folder' ? 'la carpeta' : 'la nota');
+      const permLabel = permission === 'write' ? 'edición' : 'solo lectura';
+      
+      showToast(`🔔 @${owner.username} te ha compartido ${typeLabel} "${title}" (${permLabel})`, 'info', 6000);
+
+      // Si la ventana está en segundo plano o minimizada, mostrar notificación en la pantalla del SO
+      if (document.hidden || !document.hasFocus()) {
+        showDesktopNotification({
+          title: 'Kortexa — Nuevo Recurso Compartido',
+          body: `@${owner.username} te ha compartido ${typeLabel} "${title}" (${permLabel})`,
+          onClick: () => {
+            loadSharedWithMe();
+            if (resource_type === 'vault') {
+              loadVaultInfo();
+            }
+          }
+        });
+      }
+
+      // Refrescar lista de compartidos conmigo en el sidebar
+      loadSharedWithMe();
+
+      // Si es una bóveda, refrescar el listado de bóvedas disponibles
+      if (resource_type === 'vault') {
+        loadVaultInfo();
+      }
+      break;
+    }
+
+    case 'SHARE_REVOKED': {
+      const { title, resource_type, owner } = msg.data;
+      showToast(`⚠️ Acceso revocado a "${title}" por @${owner.username}`, 'warning', 5000);
+
+      if (document.hidden || !document.hasFocus()) {
+        showDesktopNotification({
+          title: 'Kortexa — Acceso Revocado',
+          body: `@${owner.username} revocó el acceso a "${title}"`,
+          onClick: () => {
+            loadSharedWithMe();
+          }
+        });
+      }
+
+      loadSharedWithMe();
+      if (resource_type === 'vault') {
+        loadVaultInfo();
+        if (state.isSharedVault) {
+          // Si estamos en una bóveda compartida que fue revocada, volver a la bóveda personal
+          fetch('/api/vaults')
+            .then(r => r.json())
+            .then(data => {
+              if (data.vaults && data.vaults.length > 0) {
+                switchVault(data.vaults[0].name);
+              }
+            });
+        }
+      }
+      break;
+    }
+
+    case 'NOTE_UPDATED': {
+      const { title, user } = msg.data;
+      showToast(`📝 @${user.username} guardó cambios en "${title}"`, 'info', 3500);
+
+      if (document.hidden || !document.hasFocus()) {
+        showDesktopNotification({
+          title: 'Kortexa — Nota Actualizada',
+          body: `@${user.username} guardó cambios en "${title}"`
+        });
+      }
+
+      // Si tenemos abierta esa misma nota, actualizar estado
+      if (state.activeNote && (state.activeNote.title === title || state.activeNote.filename.endsWith(title + '.md'))) {
+        setSaveStatus('Actualizado por colaborador');
+      }
+      break;
+    }
+
+    case 'FRIEND_REQUEST_RECEIVED': {
+      const { from_user } = msg.data;
+      playNotificationChime();
+      showToast(`🔔 @${from_user.username} te ha enviado una solicitud de amistad`, 'info', 6000);
+      if (document.hidden || !document.hasFocus()) {
+        showDesktopNotification({
+          title: 'Kortexa — Solicitud de Amistad',
+          body: `@${from_user.username} desea ser tu amigo en Kortexa.`,
+          onClick: () => {
+            toggleChatWidget(true);
+            switchChatTab('requests');
+          }
+        });
+      }
+      loadFriendsData();
+      break;
+    }
+
+    case 'FRIEND_REQUEST_ACCEPTED': {
+      const { friend } = msg.data;
+      playNotificationChime();
+      showToast(`🤝 @${friend.username} y tú ahora son amigos`, 'success', 5000);
+      if (document.hidden || !document.hasFocus()) {
+        showDesktopNotification({
+          title: 'Kortexa — Solicitud Aceptada',
+          body: `@${friend.username} aceptó tu solicitud de amistad.`
+        });
+      }
+      loadFriendsData();
+      break;
+    }
+
+    case 'FRIEND_REMOVED': {
+      loadFriendsData();
+      if (activeChatFriend && activeChatFriend.id === msg.data.friendId) {
+        showToast(`Tu amistad con @${msg.data.username} ha concluido`, 'info');
+        closeConversation();
+      }
+      break;
+    }
+
+    case 'CHAT_MESSAGE_RECEIVED': {
+      const { message } = msg.data;
+      playNotificationChime();
+
+      const widget = document.getElementById('chat-widget');
+      const isWidgetVisible = widget && widget.style.display !== 'none';
+      const isViewingThisConversation = isWidgetVisible && activeChatFriend && Number(activeChatFriend.id) === Number(message.sender_id);
+      const isWindowActive = !document.hidden && document.hasFocus();
+
+      // Si el usuario está viendo activamente este chat en primer plano
+      if (isViewingThisConversation && isWindowActive) {
+        appendMessageToChat(message);
+        fetch(`/api/chat/${message.sender_id}/messages`);
+      } else {
+        // Si no está en primer plano o no está viendo esta conversación
+        if (isViewingThisConversation) {
+          appendMessageToChat(message);
+        }
+
+        chatUnreadCounts[message.sender_id] = (chatUnreadCounts[message.sender_id] || 0) + 1;
+        updateUnreadBadges();
+        renderFriendsList();
+
+        if (!document.hidden) {
+          showToast(`💬 @${message.sender.username}: "${message.content}"`, 'info', 5000);
+        }
+
+        // Mostrar notificación de escritorio en el SO (Windows / Mac)
+        showDesktopNotification({
+          title: `Kortexa — Mensaje de @${message.sender.username}`,
+          body: message.content,
+          tag: `kortexa-msg-${message.sender_id}-${Date.now()}`,
+          onClick: () => {
+            toggleChatWidget(true);
+            const friendObj = (chatFriendsData.friends || []).find(f => f.user && f.user.id === message.sender_id)?.user || message.sender;
+            openConversationWith(friendObj);
+          }
+        });
+      }
+      break;
+    }
+  }
+}
+
+// ==========================================
+// MÓDULO DE CHAT & RED DE AMIGOS
+// ==========================================
+let activeChatFriend = null;
+let chatFriendsData = { friends: [], incomingRequests: [], outgoingRequests: [] };
+let chatUnreadCounts = {};
+let chatAddSearchDebounce = null;
+
+function setupChatWidgetEventListeners() {
+  const btnToggle = document.getElementById('btn-toggle-chat-drawer');
+  const widget = document.getElementById('chat-widget');
+  const btnClose = document.getElementById('btn-close-chat-widget');
+  const btnCloseConv = document.getElementById('btn-close-conv');
+  const btnBack = document.getElementById('btn-back-to-friends');
+
+  const tabFriends = document.getElementById('chat-tab-friends-btn');
+  const tabRequests = document.getElementById('chat-tab-requests-btn');
+  const tabAdd = document.getElementById('chat-tab-add-btn');
+
+  const searchAddInput = document.getElementById('chat-add-friend-search');
+  const searchAddDropdown = document.getElementById('chat-add-friend-dropdown');
+
+  const chatForm = document.getElementById('chat-message-form');
+  const chatInput = document.getElementById('chat-message-input');
+
+  if (!btnToggle || !widget) return;
+
+  btnToggle.addEventListener('click', () => {
+    const isVisible = widget.style.display !== 'none';
+    toggleChatWidget(!isVisible);
+  });
+
+  btnClose?.addEventListener('click', () => toggleChatWidget(false));
+  btnCloseConv?.addEventListener('click', () => toggleChatWidget(false));
+  btnBack?.addEventListener('click', closeConversation);
+
+  // Cambio de pestañas
+  tabFriends?.addEventListener('click', () => switchChatTab('friends'));
+  tabRequests?.addEventListener('click', () => switchChatTab('requests'));
+  tabAdd?.addEventListener('click', () => switchChatTab('add'));
+
+  // Búsqueda para añadir amigo
+  searchAddInput?.addEventListener('input', (e) => {
+    const val = e.target.value.trim();
+    clearTimeout(chatAddSearchDebounce);
+    if (!val) {
+      searchAddDropdown.style.display = 'none';
+      searchAddDropdown.innerHTML = '';
+      return;
+    }
+
+    chatAddSearchDebounce = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/users/search?q=${encodeURIComponent(val)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const users = data.users || [];
+
+        searchAddDropdown.innerHTML = '';
+        if (users.length === 0) {
+          searchAddDropdown.innerHTML = '<div style="padding: 10px; font-size: 11.5px; color: var(--text-muted); text-align: center;">No se encontraron usuarios</div>';
+          searchAddDropdown.style.display = 'block';
+          return;
+        }
+
+        users.forEach(u => {
+          const isFriend = chatFriendsData.friends.some(f => f.user.id === u.id);
+          const hasRequested = chatFriendsData.outgoingRequests.some(r => r.to_user.id === u.id);
+
+          const item = document.createElement('div');
+          item.className = 'chat-friend-row';
+          item.innerHTML = `
+            <div class="chat-friend-left">
+              <div class="share-user-avatar-wrap">
+                <div class="share-user-avatar" style="width: 26px; height: 26px; font-size: 11px;">${(u.username || 'U')[0].toUpperCase()}</div>
+                <span class="user-presence-dot avatar-badge ${u.is_online ? 'online' : ''}" data-user-presence-id="${u.id}"></span>
+              </div>
+              <div class="chat-friend-info">
+                <div class="chat-friend-fullname">${escapeHtml(u.nombre_completo || u.username)}</div>
+                <div class="chat-friend-handle">@${escapeHtml(u.username)}</div>
+              </div>
+            </div>
+            <div class="chat-friend-right">
+              ${isFriend 
+                ? '<span style="font-size: 10.5px; color: #10b981; font-weight: 600;">Amigo</span>'
+                : (hasRequested 
+                    ? '<span style="font-size: 10.5px; color: var(--text-muted);">Enviada</span>'
+                    : '<button type="button" class="chat-btn-accept" style="padding: 4px 8px; font-size: 11px;">+ Agregar</button>')}
+            </div>
+          `;
+
+          const addBtn = item.querySelector('.chat-btn-accept');
+          addBtn?.addEventListener('click', async (evt) => {
+            evt.stopPropagation();
+            try {
+              const r = await fetch('/api/friends/request', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ target_user_id: u.id })
+              });
+              const resData = await r.json();
+              if (r.ok) {
+                showToast(`Solicitud enviada a @${u.username}`, 'success');
+                searchAddInput.value = '';
+                searchAddDropdown.style.display = 'none';
+                loadFriendsData();
+              } else {
+                showToast(resData.error || 'Error al enviar solicitud', 'warning');
+              }
+            } catch {
+              showToast('Error de conexión', 'danger');
+            }
+          });
+
+          searchAddDropdown.appendChild(item);
+        });
+
+        searchAddDropdown.style.display = 'block';
+      } catch (err) {
+        console.error('Error buscando usuarios para amigos:', err);
+      }
+    }, 200);
+  });
+
+  // Cerrar dropdown si se hace clic fuera
+  document.addEventListener('click', (e) => {
+    if (!searchAddDropdown?.contains(e.target) && e.target !== searchAddInput) {
+      if (searchAddDropdown) searchAddDropdown.style.display = 'none';
+    }
+  });
+
+  // Botón para habilitar notificaciones nativas del SO
+  const btnEnableNotifs = document.getElementById('btn-enable-desktop-notifs');
+  btnEnableNotifs?.addEventListener('click', async () => {
+    const granted = await requestDesktopNotificationPermission(true);
+    checkChatNotificationBanner();
+    if (granted) {
+      showDesktopNotification({
+        title: 'Kortexa — Alertas Activas',
+        body: '¡Listo! Recibirás notificaciones en pantalla incluso con la ventana minimizada.'
+      });
+    }
+  });
+
+  // Enviar mensaje
+  chatForm?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!chatInput) return;
+    const text = chatInput.value.trim();
+    if (!text || !activeChatFriend) return;
+
+    chatInput.value = '';
+    await sendChatMessage(text);
+  });
+}
+
+function checkChatNotificationBanner() {
+  const banner = document.getElementById('chat-perm-banner');
+  if (!banner) return;
+  if ('Notification' in window && Notification.permission === 'default') {
+    banner.style.display = 'flex';
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+function toggleChatWidget(open) {
+  const widget = document.getElementById('chat-widget');
+  const btnToggle = document.getElementById('btn-toggle-chat-drawer');
+  if (!widget) return;
+  if (open) {
+    toggleSharedDrawer(false);
+  }
+  widget.style.display = open ? 'flex' : 'none';
+  if (btnToggle) btnToggle.classList.toggle('active', open);
+  if (open) {
+    checkChatNotificationBanner();
+    loadFriendsData();
+    loadUnreadMessagesSummary();
+  } else {
+    toggleChatEmojiPicker(false);
+  }
+  // Disparar evento resize para que editor, grafo y vistas flexibles se adapten suavemente al nuevo ancho
+  window.dispatchEvent(new Event('resize'));
+  setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
+}
+
+function switchChatTab(tabName) {
+  const tabFriends = document.getElementById('chat-tab-friends-btn');
+  const tabRequests = document.getElementById('chat-tab-requests-btn');
+  const tabAdd = document.getElementById('chat-tab-add-btn');
+
+  const panelFriends = document.getElementById('chat-panel-friends');
+  const panelRequests = document.getElementById('chat-panel-requests');
+  const panelAdd = document.getElementById('chat-panel-add');
+
+  tabFriends?.classList.toggle('active', tabName === 'friends');
+  tabRequests?.classList.toggle('active', tabName === 'requests');
+  tabAdd?.classList.toggle('active', tabName === 'add');
+
+  if (panelFriends) panelFriends.style.display = tabName === 'friends' ? 'block' : 'none';
+  if (panelRequests) panelRequests.style.display = tabName === 'requests' ? 'block' : 'none';
+  if (panelAdd) panelAdd.style.display = tabName === 'add' ? 'block' : 'none';
+}
+
+async function loadFriendsData() {
+  try {
+    const res = await fetch('/api/friends');
+    if (!res.ok) return;
+    chatFriendsData = await res.json();
+
+    // Actualizar badge de solicitudes
+    const count = (chatFriendsData.incomingRequests || []).length;
+    const badge = document.getElementById('chat-requests-count-badge');
+    if (badge) {
+      badge.textContent = count;
+      badge.style.display = count > 0 ? 'inline-block' : 'none';
+    }
+
+    renderFriendsList();
+    renderIncomingRequests();
+  } catch (err) {
+    console.error('Error al cargar amigos:', err);
+  }
+}
+
+function renderFriendsList() {
+  const container = document.getElementById('chat-friends-list');
+  if (!container) return;
+
+  const friends = chatFriendsData.friends || [];
+  if (friends.length === 0) {
+    container.innerHTML = `
+      <div style="padding: 30px 16px; text-align: center; color: var(--text-muted); font-size: 12.5px;">
+        <div style="font-size: 24px; margin-bottom: 6px;">👥</div>
+        Aún no tienes amigos agregados.<br>
+        Usa la pestaña <strong>➕ Añadir</strong> para buscar amigos.
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = '';
+  friends.forEach(f => {
+    const u = f.user;
+    const isOnline = isUserOnline(u.id) || !!u.is_online;
+    if (isOnline) state.onlineUsers.add(u.id);
+    const unread = chatUnreadCounts[u.id] || 0;
+
+    const row = document.createElement('div');
+    row.className = 'chat-friend-row';
+    row.innerHTML = `
+      <div class="chat-friend-left">
+        <div class="share-user-avatar-wrap">
+          <div class="share-user-avatar" style="width: 28px; height: 28px; font-size: 11px;">${(u.username || 'U')[0].toUpperCase()}</div>
+          <span class="user-presence-dot avatar-badge ${isOnline ? 'online' : ''}" data-user-presence-id="${u.id}" title="${isOnline ? 'En línea' : 'Desconectado'}"></span>
+        </div>
+        <div class="chat-friend-info">
+          <div class="chat-friend-fullname">${escapeHtml(u.nombre_completo || u.username)}</div>
+          <div class="chat-friend-handle">@${escapeHtml(u.username)}</div>
+        </div>
+      </div>
+      <div class="chat-friend-right">
+        ${unread > 0 ? `<span class="chat-unread-count-pill">${unread}</span>` : ''}
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-muted);">
+          <polyline points="9 18 15 12 9 6"/>
+        </svg>
+      </div>
+    `;
+
+    row.addEventListener('click', () => {
+      openConversationWith(u);
+    });
+
+    container.appendChild(row);
+  });
+}
+
+function renderIncomingRequests() {
+  const container = document.getElementById('chat-incoming-requests-list');
+  if (!container) return;
+
+  const reqs = chatFriendsData.incomingRequests || [];
+  if (reqs.length === 0) {
+    container.innerHTML = `
+      <div style="padding: 24px 16px; text-align: center; color: var(--text-muted); font-size: 12.5px;">
+        No tienes solicitudes pendientes.
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = '';
+  reqs.forEach(r => {
+    const u = r.from_user;
+    const item = document.createElement('div');
+    item.className = 'chat-request-row';
+    item.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <div class="share-user-avatar" style="width: 26px; height: 26px; font-size: 11px;">${(u.username || 'U')[0].toUpperCase()}</div>
+        <div>
+          <div style="font-size: 12.5px; font-weight: 700; color: var(--text-main);">${escapeHtml(u.nombre_completo || u.username)}</div>
+          <div style="font-size: 11px; color: var(--text-muted);">@${escapeHtml(u.username)}</div>
+        </div>
+      </div>
+      <div class="chat-request-actions">
+        <button type="button" class="chat-btn-accept" data-req-id="${r.request_id}">Aceptar</button>
+        <button type="button" class="chat-btn-reject" data-req-id="${r.request_id}">Rechazar</button>
+      </div>
+    `;
+
+    item.querySelector('.chat-btn-accept').addEventListener('click', async () => {
+      await respondFriendReq(r.request_id, 'accept');
+    });
+    item.querySelector('.chat-btn-reject').addEventListener('click', async () => {
+      await respondFriendReq(r.request_id, 'reject');
+    });
+
+    container.appendChild(item);
+  });
+}
+
+async function respondFriendReq(requestId, action) {
+  try {
+    const res = await fetch('/api/friends/respond', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request_id: requestId, action })
+    });
+    if (res.ok) {
+      showToast(action === 'accept' ? 'Solicitud de amistad aceptada' : 'Solicitud rechazada', 'info');
+      loadFriendsData();
+    }
+  } catch {
+    showToast('Error al responder solicitud', 'danger');
+  }
+}
+
+async function openConversationWith(friendUser) {
+  activeChatFriend = friendUser;
+
+  const viewFriends = document.getElementById('chat-view-friends');
+  const viewConv = document.getElementById('chat-view-conversation');
+  if (viewFriends) viewFriends.style.display = 'none';
+  if (viewConv) viewConv.style.display = 'flex';
+
+  // Configurar header
+  document.getElementById('conv-friend-name').textContent = friendUser.nombre_completo || friendUser.username;
+  document.getElementById('conv-friend-avatar').textContent = (friendUser.username || 'U')[0].toUpperCase();
+  
+  const isOnline = isUserOnline(friendUser.id);
+  const dot = document.getElementById('conv-friend-presence-dot');
+  const statusEl = document.getElementById('conv-friend-status');
+  if (dot) dot.classList.toggle('online', isOnline);
+  if (statusEl) statusEl.textContent = isOnline ? '🟢 En línea' : '⚪ Desconectado';
+
+  // Limpiar no leídos de este usuario
+  if (chatUnreadCounts[friendUser.id]) {
+    delete chatUnreadCounts[friendUser.id];
+    updateUnreadBadges();
+  }
+
+  // Cargar mensajes
+  const container = document.getElementById('chat-messages-container');
+  if (container) container.innerHTML = '<div style="padding: 20px; text-align: center; font-size: 11.5px; color: var(--text-muted);">Cargando mensajes...</div>';
+
+  try {
+    const res = await fetch(`/api/chat/${friendUser.id}/messages`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const msgs = data.messages || [];
+
+    if (container) {
+      container.innerHTML = '';
+      if (msgs.length === 0) {
+        container.innerHTML = `
+          <div style="padding: 40px 10px; text-align: center; color: var(--text-muted); font-size: 12px;">
+            Este es el comienzo de tu conversación con @${escapeHtml(friendUser.username)}.<br>
+            ¡Saluda y empieza a colaborar! 👋
+          </div>
+        `;
+      } else {
+        msgs.forEach(m => appendMessageToChat(m, false));
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+
+    const input = document.getElementById('chat-message-input');
+    input?.focus();
+  } catch (err) {
+    console.error('Error al cargar mensajes:', err);
+  }
+}
+
+function closeConversation() {
+  activeChatFriend = null;
+  toggleChatEmojiPicker(false);
+  const viewFriends = document.getElementById('chat-view-friends');
+  const viewConv = document.getElementById('chat-view-conversation');
+  if (viewFriends) viewFriends.style.display = 'flex';
+  if (viewConv) viewConv.style.display = 'none';
+  loadFriendsData();
+}
+
+async function sendChatMessage(content) {
+  if (!activeChatFriend) return;
+  try {
+    const res = await fetch(`/api/chat/${activeChatFriend.id}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      showToast(err.error || 'Error al enviar mensaje', 'warning');
+      return;
+    }
+    const data = await res.json();
+    appendMessageToChat(data.message, true);
+  } catch {
+    showToast('Error al enviar mensaje', 'danger');
+  }
+}
+
+function appendMessageToChat(msg, autoScroll = true) {
+  const container = document.getElementById('chat-messages-container');
+  if (!container) return;
+
+  const isMine = msg.sender_id === (state.currentUser?.id || 0);
+
+  const row = document.createElement('div');
+  row.className = `chat-msg-row ${isMine ? 'mine' : 'theirs'}`;
+
+  let timeStr = '';
+  if (msg.created_at) {
+    const d = new Date(msg.created_at);
+    timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  row.innerHTML = `
+    <div class="chat-bubble ${isMine ? 'mine' : 'theirs'}">${escapeHtml(msg.content)}</div>
+    <span class="chat-msg-time">${timeStr}</span>
+  `;
+
+  container.appendChild(row);
+  if (autoScroll) {
+    container.scrollTop = container.scrollHeight;
+  }
+}
+
+async function loadUnreadMessagesSummary() {
+  try {
+    const res = await fetch('/api/chat/unread');
+    if (!res.ok) return;
+    const data = await res.json();
+    chatUnreadCounts = data.bySender || {};
+    updateUnreadBadges();
+  } catch {}
+}
+
+function updateUnreadBadges() {
+  let total = 0;
+  Object.values(chatUnreadCounts).forEach(c => total += c);
+
+  const badge = document.getElementById('chat-unread-badge');
+  if (badge) {
+    badge.textContent = total;
+    badge.style.display = total > 0 ? 'inline-block' : 'none';
+  }
+}
+
+// ==========================================
+// MÓDULO Y SELECTOR DE EMOJIS (CHAT & EDITOR)
+// ==========================================
+const EMOJI_CATEGORIES = {
+  smileys: {
+    name: 'Caras y Emociones',
+    icon: '😃',
+    emojis: [
+      { char: '😀', name: 'sonrisa grin feliz alegre' },
+      { char: '😃', name: 'feliz smiley risa alegre' },
+      { char: '😄', name: 'sonrisa ojos risa smile contento' },
+      { char: '😁', name: 'dientes beam risa mueca' },
+      { char: '😆', name: 'carcajada laugh cerrado divertido' },
+      { char: '😅', name: 'alivio sudor sweat smile risa' },
+      { char: '😂', name: 'llorar de risa joy risa carcajada lol jaja' },
+      { char: '🤣', name: 'muerto de risa rofl rodar risa xd' },
+      { char: '🥲', name: 'sonrisa lagrima emocionado conmocion' },
+      { char: '🥹', name: 'ojos tiernos conmovido pleading ternura' },
+      { char: '😊', name: 'sonrojado tierno blush calido' },
+      { char: '😇', name: 'angel inocente halo santo bueno' },
+      { char: '🙂', name: 'leve sonrisa amable ok' },
+      { char: '🙃', name: 'al reves ironia sarcasmo upside' },
+      { char: '😉', name: 'guiño complice wink ojo broma' },
+      { char: '😌', name: 'aliviado paz calma zen relax' },
+      { char: '😍', name: 'enamorado ojos corazon love amor' },
+      { char: '🥰', name: 'amor ternura corazones querido' },
+      { char: '😘', name: 'beso corazon kiss amor' },
+      { char: '😗', name: 'beso silbido' },
+      { char: '😚', name: 'beso ojos cerrados ternura' },
+      { char: '😋', name: 'delicioso rico yummy sabroso' },
+      { char: '😛', name: 'lengua burla chistoso' },
+      { char: '😜', name: 'lengua guiño loco broma divertido' },
+      { char: '🤪', name: 'loco chiflado zany descontrol' },
+      { char: '🤨', name: 'ceja levantada sospecha duda desconfianza' },
+      { char: '🧐', name: 'monoculo curioso detective intelectual' },
+      { char: '🤓', name: 'nerd inteligente gafas lentes sabio' },
+      { char: '😎', name: 'cool gafas de sol estilo pro genial' },
+      { char: '🤩', name: 'estrellas emocionado star struck brillante' },
+      { char: '🥳', name: 'fiesta celebracion cumple party felicidades' },
+      { char: '😏', name: 'sonrisa picara smirk ligue' },
+      { char: '😒', name: 'descontento fastidio aburrido me da igual' },
+      { char: '😞', name: 'decepcionado triste desilusion' },
+      { char: '😔', name: 'pensativo triste desanimado solo' },
+      { char: '🥺', name: 'por favor suplica tierno puppy eyes te lo pido' },
+      { char: '😢', name: 'llorar lagrima triste cry pena' },
+      { char: '😭', name: 'llanto inconsolable triste sob lagrimas' },
+      { char: '😤', name: 'furia triunfo orgullo vapor humo' },
+      { char: '😠', name: 'enojado molesto angry furia' },
+      { char: '😡', name: 'furioso rojo rabia rage odio' },
+      { char: '🤬', name: 'insulto censura enojo maldecir bronca' },
+      { char: '🤯', name: 'mente explotada shock increible mind blown uau' },
+      { char: '😳', name: 'avergonzado sorprendido sonrojado pena' },
+      { char: '🥵', name: 'calor caliente sudando verano ardiente' },
+      { char: '🥶', name: 'frio congelado temblando invierno' },
+      { char: '😱', name: 'grito susto miedo scream panico' },
+      { char: '😨', name: 'asustado miedo preocupado temblor' },
+      { char: '😰', name: 'ansiedad nervioso sudor frio preocupacion' },
+      { char: '😥', name: 'triste aliviado suspiro' },
+      { char: '😓', name: 'preocupado cansado sudor trabajo' },
+      { char: '🤗', name: 'abrazo cariñoso hug abrazo' },
+      { char: '🤔', name: 'pensando duda idea thinking pregunta reflexionar' },
+      { char: '🫣', name: 'mirando entre dedos timido curioso asomado' },
+      { char: '🤫', name: 'silencio secreto callar shush silencio' },
+      { char: '🫡', name: 'saludo respeto militar si señor orden entendido' },
+      { char: '🫠', name: 'derritiendose verguenza calor melting me muero' },
+      { char: '🤥', name: 'mentira pinocho pinochada liar mentiroso' },
+      { char: '😶', name: 'sin palabras callado silencio mudo' },
+      { char: '😐', name: 'neutral inexpresivo serio neutro' },
+      { char: '😑', name: 'sin comentarios serio aburrido impass' },
+      { char: '😬', name: 'mueca incomodo cringe pena ajena' },
+      { char: '🫨', name: 'temblando shock sacudida temblor' },
+      { char: '😮', name: 'sorpresa boca abierta oh uau' },
+      { char: '😯', name: 'asombrado sorpresa uau sorpresa' },
+      { char: '😲', name: 'impactado boca abierta increible' },
+      { char: '🥱', name: 'bostezo sueño aburrido yawn cansado' },
+      { char: '😴', name: 'dormido zzz sueño descansando buenas noches' },
+      { char: '🤤', name: 'babeando rico antojo que rico' },
+      { char: '😵', name: 'mareado ko desmayado confuso' },
+      { char: '🤐', name: 'boca cerrada cremallera secreto mudo silencio' },
+      { char: '🥴', name: 'mareado borracho woozy resaca fiesta' },
+      { char: '🤢', name: 'nauseas asco enfermo mareo' },
+      { char: '🤮', name: 'vomito asco enfermo puaj' },
+      { char: '🤧', name: 'estornudo gripe enfermo achis resfriado' },
+      { char: '😷', name: 'mascarilla cubrebocas enfermo doctor hospital' },
+      { char: '🤒', name: 'termometro fiebre enfermo temperatura' },
+      { char: '🤕', name: 'vendado golpe lastimado herido dolor' },
+      { char: '🤑', name: 'dinero rico plata billetes cash dolares' },
+      { char: '🤠', name: 'vaquero cowboy sombrero oaxaca norte' },
+      { char: '😈', name: 'diablillo travieso diablo sonrisa maldad' },
+      { char: '👿', name: 'diablo enojado imp maldad demonio' },
+      { char: '👻', name: 'fantasma ghost boo susto miedo halloween' },
+      { char: '💀', name: 'calavera muerto skull muerto de risa' },
+      { char: '☠️', name: 'calavera pirata peligro veneno huesos' },
+      { char: '👽', name: 'alien extraterrestre ovni ufo espacio' },
+      { char: '🤖', name: 'robot ia bot tecnologico maquina' },
+      { char: '💩', name: 'caca poop gracioso popo excremento' },
+      { char: '🤡', name: 'payaso clown risa burla circo' }
+    ]
+  },
+  gestures: {
+    name: 'Gestos y Personas',
+    icon: '👍',
+    emojis: [
+      { char: '👋', name: 'hola adios saludo mano wave que tal' },
+      { char: '🤚', name: 'mano levantada alto stop espera' },
+      { char: '✋', name: 'mano abierta 5 cinco parada choca esos cinco' },
+      { char: '🖖', name: 'vulcano spock paz saludo prosperidad' },
+      { char: '👌', name: 'ok perfecto excelente genial bien de acuerdo' },
+      { char: '🤌', name: 'que quieres que dices italiano chef que onda' },
+      { char: '🤏', name: 'un poco poquito pequeño small tantito' },
+      { char: '✌️', name: 'paz victoria peace dos calma' },
+      { char: '🤞', name: 'dedos cruzados suerte ojala crossed esperanza' },
+      { char: '🫰', name: 'corazon con dedos dinero kpop finger heart amor' },
+      { char: '🤟', name: 'te quiero amor te amo love señas' },
+      { char: '🤘', name: 'rock metal fiesta concierto pesado' },
+      { char: '🤙', name: 'llamame shaka surfer buena onda que onda' },
+      { char: '👈', name: 'señalar izquierda left alla' },
+      { char: '👉', name: 'señalar derecha mira alla right' },
+      { char: '👆', name: 'señalar arriba up este de arriba' },
+      { char: '👇', name: 'señalar abajo mira aqui down este' },
+      { char: '☝️', name: 'atencion un momento arriba primero' },
+      { char: '🫵', name: 'te señalo a ti tu you eres tu' },
+      { char: '👍', name: 'pulgar arriba me gusta bien de acuerdo like va' },
+      { char: '👎', name: 'pulgar abajo no me gusta mal dislike nel' },
+      { char: '✊', name: 'puño cerrado poder fuerza resistencia' },
+      { char: '👊', name: 'choque de puños golpe punch chocalas colega' },
+      { char: '🤛', name: 'puño izquierda choque de puños' },
+      { char: '🤜', name: 'puño derecha choque de puños' },
+      { char: '👏', name: 'aplausos bravo aplaudir felicidades clap ovacion' },
+      { char: '🙌', name: 'manos arriba celebracion aleluya hurra viva' },
+      { char: '🫶', name: 'corazon con manos amor cariño te amo' },
+      { char: '👐', name: 'manos abiertas bienvenida recibir' },
+      { char: '🤲', name: 'palmas arriba peticion plegaria recibir' },
+      { char: '🤝', name: 'apreton de manos trato acuerdo sociedad socios hecho' },
+      { char: '🙏', name: 'por favor gracias rezo oracion bendicion pray porfa' },
+      { char: '✍️', name: 'escribir firma nota lapiz redactar apuntar' },
+      { char: '💪', name: 'musculo fuerza fuerte poder gym entreno biceps' },
+      { char: '👀', name: 'ojos mirando atento pendiente chisme viendo' },
+      { char: '👁️', name: 'ojo mirar vision visto mirame' },
+      { char: '🧠', name: 'cerebro mente inteligencia idea pensar sesos' },
+      { char: '🫂', name: 'abrazo personas afecto compañerismo apoyo' },
+      { char: '👤', name: 'silueta usuario persona perfil cuenta' },
+      { char: '👥', name: 'usuarios amigos equipo grupo comunidad' }
+    ]
+  },
+  hearts: {
+    name: 'Amor y Corazones',
+    icon: '❤️',
+    emojis: [
+      { char: '❤️', name: 'corazon rojo amor te quiero pasion red heart te amo' },
+      { char: '🧡', name: 'corazon naranja calidez energia calido' },
+      { char: '💛', name: 'corazon amarillo amistad luz sol alegria' },
+      { char: '💚', name: 'corazon verde naturaleza esperanza vida salud' },
+      { char: '💙', name: 'corazon azul confianza lealtad paz cielo' },
+      { char: '💜', name: 'corazon morado purpura magia lujo encanto' },
+      { char: '🖤', name: 'corazon negro elegancia luto dark gótico' },
+      { char: '🤍', name: 'corazon blanco pureza paz sincero limpio' },
+      { char: '🤎', name: 'corazon cafe marron tierra cafe' },
+      { char: '💔', name: 'corazon roto desamor tristeza herido broken triste' },
+      { char: '❤️‍🔥', name: 'corazon en llamas ardiente pasion amor fuego intenso' },
+      { char: '❤️‍🩹', name: 'corazon sanando recuperacion vendaje alivio' },
+      { char: '❣️', name: 'exclamacion corazon punto enfasis cariño' },
+      { char: '💕', name: 'dos corazones flotando amor ternura enamorados' },
+      { char: '💞', name: 'corazones girando amor correspondido vueltas' },
+      { char: '💓', name: 'corazon latiendo ritmo emocion latido' },
+      { char: '💗', name: 'corazon creciendo amor expansivo tierno' },
+      { char: '💖', name: 'corazon brillante destellos magia especial lindo' },
+      { char: '💘', name: 'flechazo cupido enamorado directo flecha' },
+      { char: '💝', name: 'corazon con lazo regalo sorpresa entregado' },
+      { char: '💟', name: 'adorno corazon decoracion purpura detalle' },
+      { char: '💌', name: 'carta de amor mensaje carta sobre correo corazon' },
+      { char: '💋', name: 'marca de beso labios mua besito' },
+      { char: '💍', name: 'anillo compromiso boda promesa diamante casamiento' },
+      { char: '💎', name: 'diamante joya valioso brillante gema lujo' }
+    ]
+  },
+  objects: {
+    name: 'Objetos y Festejo',
+    icon: '🎉',
+    emojis: [
+      { char: '🎉', name: 'fiesta celebracion exito felicidades tada fiesta viva' },
+      { char: '🎊', name: 'confetti fiesta alegria evento bola' },
+      { char: '🎈', name: 'globo fiesta cumple decoracion cumpleaños' },
+      { char: '🎁', name: 'regalo sorpresa presente caja moño' },
+      { char: '🏆', name: 'trofeo premio copa ganador campeon primer lugar' },
+      { char: '🥇', name: 'medalla oro primer lugar 1st campeon numero uno' },
+      { char: '🥈', name: 'medalla plata segundo lugar 2nd plata' },
+      { char: '🥉', name: 'medalla bronce tercer lugar 3rd bronce' },
+      { char: '🎯', name: 'diana tiro blanco meta acierto objetivo justo' },
+      { char: '🚀', name: 'cohete despegue exito crecimiento veloz space rapido' },
+      { char: '💡', name: 'bombilla foco idea genial luz inspiracion eureka' },
+      { char: '⚡', name: 'rayo trueno energia rapido electrico zap relampago' },
+      { char: '🔥', name: 'fuego calor llama top crack tendencia lit caliente' },
+      { char: '✨', name: 'brillos destellos magia nuevo limpio genial sparkles' },
+      { char: '🌟', name: 'estrella brillante destacada excelente glow' },
+      { char: '⭐', name: 'estrella favorito calificacion ranking' },
+      { char: '💥', name: 'explosion impacto boom sorpresa choque' },
+      { char: '💯', name: 'cien puntos perfecto 100 diez diez total calificacion' },
+      { char: '🔔', name: 'campana notificacion alerta timbre aviso' },
+      { char: '📣', name: 'megafono aviso anuncio comunicado megafono' },
+      { char: '💬', name: 'burbuja mensaje chat comentario conversacion hablar' },
+      { char: '💭', name: 'pensamiento idea sueño pensar burbuja nube' },
+      { char: '📌', name: 'chincheta pin fijar importante recordar fijado' },
+      { char: '📍', name: 'marcador mapa ubicacion aqui destino gps' },
+      { char: '📎', name: 'clip adjunto anexo documento sujetapapeles' },
+      { char: '📁', name: 'carpeta archivos organizacion folder' },
+      { char: '📝', name: 'documento nota escribir texto lapiz apunte' },
+      { char: '📅', name: 'calendario fecha cita evento dia agenda' },
+      { char: '⏰', name: 'reloj despertador hora alarma tiempo temprano' },
+      { char: '🔒', name: 'candado cerrado seguro clave privada seguridad' },
+      { char: '🔑', name: 'llave acceso clave password abrir secreto' },
+      { char: '💻', name: 'laptop computadora ordenador portatil trabajo code pc' },
+      { char: '📱', name: 'celular smartphone telefono movil llamada mensaje' },
+      { char: '🎧', name: 'auriculares musica podcast sonido canciones' },
+      { char: '🎮', name: 'videojuegos control consola jugar gamer play' }
+    ]
+  },
+  nature: {
+    name: 'Naturaleza y Animales',
+    icon: '🌿',
+    emojis: [
+      { char: '🐶', name: 'perro cachorro perrito dog mascota canino guau' },
+      { char: '🐱', name: 'gato gatito cat miau mascota felino michi' },
+      { char: '🦊', name: 'zorro astuto fox salvaje' },
+      { char: '🐻', name: 'oso tierno bear peluche bosque' },
+      { char: '🐼', name: 'panda osito lindo bamboo china' },
+      { char: '🦁', name: 'leon rey fuerza selva lion felino' },
+      { char: '🐯', name: 'tigre fiero rayas tiger selva' },
+      { char: '🐵', name: 'mono mico chango monkey selva' },
+      { char: '🦄', name: 'unicornio magia fantastico unicorn arcoiris' },
+      { char: '🐝', name: 'abeja miel trabajo bee insecto' },
+      { char: '🦋', name: 'mariposa transformacion belleza alas volar' },
+      { char: '🌸', name: 'flor cerezo primavera rosa sakura flor' },
+      { char: '🌺', name: 'flor hibisco tropical hawaiana' },
+      { char: '🌻', name: 'girasol sol amarillo flor campo' },
+      { char: '🌹', name: 'rosa roja amor flor rose romance' },
+      { char: '🍀', name: 'trebol 4 hojas buena suerte fortuna verde' },
+      { char: '🌱', name: 'brote planta inicio crecimiento verde brotar' },
+      { char: '🌲', name: 'arbol pino bosque verde naturaleza madera' },
+      { char: '🌳', name: 'arbol naturaleza verde roble sombra' },
+      { char: '☀️', name: 'sol dia despejado calor brillante sun calido' },
+      { char: '🌙', name: 'luna noche descanso cielo moon nocturno' },
+      { char: '🌧️', name: 'lluvia clima mojado tormenta nublado gotas' },
+      { char: '❄️', name: 'nieve copo invierno frio helado helada' },
+      { char: '🌈', name: 'arcoiris esperanza colores diversidad paz cielo' }
+    ]
+  },
+  food: {
+    name: 'Comida y Bebida',
+    icon: '🍕',
+    emojis: [
+      { char: '☕', name: 'cafe taza descanso caliente desayuno morning espresso' },
+      { char: '🍵', name: 'te verde matcha infusion relajante bebida' },
+      { char: '🍕', name: 'pizza comida queso cena antojo rebanada' },
+      { char: '🍔', name: 'hamburguesa burger comida rapida queso carne' },
+      { char: '🍟', name: 'papas fritas french fries aperitivo snack' },
+      { char: '🌮', name: 'taco comida mexicana antojo carne tortilla' },
+      { char: '🍿', name: 'palomitas cine pelicula pop corn palomitas de maiz' },
+      { char: '🍩', name: 'dona donut postre dulce glaseada' },
+      { char: '🍪', name: 'galleta cookie dulce chocolate galletita' },
+      { char: '🍫', name: 'chocolate barra cacao dulce golosina' },
+      { char: '🎂', name: 'pastel torta cumpleaños festejo cake velitas' },
+      { char: '🧁', name: 'cupcake quequito dulce postre panquesito' },
+      { char: '🍦', name: 'helado nieve cono conito dulce heladito' },
+      { char: '🍎', name: 'manzana roja fruta saludable salud maestro' },
+      { char: '🥑', name: 'aguacate palta guacamole saludable verde' },
+      { char: '🍓', name: 'fresa frutilla roja fruta dulce' },
+      { char: '🍉', name: 'sandia refrescante fruta fresca verano' },
+      { char: '🍻', name: 'cervezas brindis salud cheers fiesta chelas' },
+      { char: '🥂', name: 'copas champan brindis celebracion salud brindemos' },
+      { char: '🍷', name: 'vino copa tinto relajacion cena uva' }
+    ]
+  }
+};
+
+function getFilteredEmojis(category, query) {
+  const cleanQ = (query || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (cleanQ) {
+    const results = [];
+    const seen = new Set();
+    Object.values(EMOJI_CATEGORIES).forEach(cat => {
+      cat.emojis.forEach(item => {
+        if (!seen.has(item.char)) {
+          const cleanName = item.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          if (cleanName.includes(cleanQ) || item.char.includes(cleanQ)) {
+            results.push(item);
+            seen.add(item.char);
+          }
+        }
+      });
+    });
+    return results;
+  }
+  const cat = EMOJI_CATEGORIES[category] || EMOJI_CATEGORIES.smileys;
+  return cat.emojis || [];
+}
+
+function renderEmojiButtons(container, emojis, onSelect) {
+  if (!container) return;
+  container.innerHTML = '';
+  if (!emojis || emojis.length === 0) {
+    container.innerHTML = '<div style="grid-column: 1 / -1; padding: 22px 10px; text-align: center; color: var(--text-muted); font-size: 11.5px;">No se encontraron emojis</div>';
+    return;
+  }
+  emojis.forEach(item => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'emoji-item-btn';
+    b.textContent = item.char;
+    b.title = item.name.split(' ')[0] || item.char;
+    b.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      onSelect(item.char);
+    });
+    container.appendChild(b);
+  });
+}
+
+function insertEmojiIntoInput(inputEl, emoji) {
+  if (!inputEl) return;
+  const start = inputEl.selectionStart !== null ? inputEl.selectionStart : inputEl.value.length;
+  const end = inputEl.selectionEnd !== null ? inputEl.selectionEnd : inputEl.value.length;
+  const val = inputEl.value;
+  inputEl.value = val.substring(0, start) + emoji + val.substring(end);
+  const nextPos = start + emoji.length;
+  inputEl.setSelectionRange(nextPos, nextPos);
+  inputEl.focus();
+}
+
+function insertEmojiIntoEditor(emoji) {
+  if (!markdownInputEl) return;
+  const start = markdownInputEl.selectionStart !== null ? markdownInputEl.selectionStart : markdownInputEl.value.length;
+  const end = markdownInputEl.selectionEnd !== null ? markdownInputEl.selectionEnd : markdownInputEl.value.length;
+  const val = markdownInputEl.value;
+  markdownInputEl.value = val.substring(0, start) + emoji + val.substring(end);
+  const nextPos = start + emoji.length;
+  markdownInputEl.setSelectionRange(nextPos, nextPos);
+  markdownInputEl.focus();
+  renderMarkdown();
+  scheduleSave();
+}
+
+let activeChatEmojiCategory = 'smileys';
+let activeEditorEmojiCategory = 'smileys';
+
+function toggleChatEmojiPicker(forceState = null) {
+  const picker = document.getElementById('chat-emoji-picker');
+  const btn = document.getElementById('btn-chat-emoji');
+  if (!picker) return;
+
+  const willShow = forceState !== null ? forceState : (picker.style.display === 'none' || !picker.style.display);
+  picker.style.display = willShow ? 'flex' : 'none';
+  btn?.classList.toggle('active', willShow);
+
+  if (willShow) {
+    const searchInput = document.getElementById('chat-emoji-search');
+    if (searchInput) searchInput.value = '';
+    renderChatEmojiGrid();
+    setTimeout(() => searchInput?.focus(), 50);
+  }
+}
+
+function renderChatEmojiGrid() {
+  const grid = document.getElementById('chat-emoji-grid');
+  const searchInput = document.getElementById('chat-emoji-search');
+  const q = searchInput?.value || '';
+  const emojis = getFilteredEmojis(activeChatEmojiCategory, q);
+  renderEmojiButtons(grid, emojis, (char) => {
+    insertEmojiIntoInput(document.getElementById('chat-message-input'), char);
+  });
+}
+
+function toggleEditorEmojiPopover(forceState = null) {
+  const popover = document.getElementById('editor-emoji-popover');
+  if (!popover) return;
+
+  const willShow = forceState !== null ? forceState : (popover.style.display === 'none' || !popover.style.display);
+  popover.style.display = willShow ? 'flex' : 'none';
+
+  if (willShow) {
+    const searchInput = document.getElementById('editor-emoji-search');
+    if (searchInput) searchInput.value = '';
+    renderEditorEmojiGrid();
+    setTimeout(() => searchInput?.focus(), 50);
+  }
+}
+
+function renderEditorEmojiGrid() {
+  const grid = document.getElementById('editor-emoji-grid');
+  const searchInput = document.getElementById('editor-emoji-search');
+  const q = searchInput?.value || '';
+  const emojis = getFilteredEmojis(activeEditorEmojiCategory, q);
+  renderEmojiButtons(grid, emojis, (char) => {
+    insertEmojiIntoEditor(char);
+    toggleEditorEmojiPopover(false);
+  });
+}
+
+function setupEmojiPickers() {
+  // 1. Selector de emojis para el CHAT
+  const btnChatEmoji = document.getElementById('btn-chat-emoji');
+  const chatSearch = document.getElementById('chat-emoji-search');
+  const chatTabs = document.getElementById('chat-emoji-tabs');
+  const chatQuick = document.getElementById('chat-emoji-quick');
+
+  btnChatEmoji?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleChatEmojiPicker();
+  });
+
+  chatSearch?.addEventListener('input', () => {
+    renderChatEmojiGrid();
+  });
+
+  chatTabs?.querySelectorAll('.emoji-tab-btn').forEach(tab => {
+    tab.addEventListener('click', (e) => {
+      e.preventDefault();
+      chatTabs.querySelectorAll('.emoji-tab-btn').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      activeChatEmojiCategory = tab.dataset.cat || 'smileys';
+      const searchInput = document.getElementById('chat-emoji-search');
+      if (searchInput) searchInput.value = '';
+      renderChatEmojiGrid();
+    });
+  });
+
+  chatQuick?.querySelectorAll('.emoji-quick-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const char = btn.dataset.emoji;
+      if (char) {
+        insertEmojiIntoInput(document.getElementById('chat-message-input'), char);
+      }
+    });
+  });
+
+  // 2. Popover de emojis para el EDITOR
+  const editorSearch = document.getElementById('editor-emoji-search');
+  const editorTabs = document.getElementById('editor-emoji-tabs');
+  const editorQuick = document.getElementById('editor-emoji-quick');
+
+  editorSearch?.addEventListener('input', () => {
+    renderEditorEmojiGrid();
+  });
+
+  editorTabs?.querySelectorAll('.emoji-tab-btn').forEach(tab => {
+    tab.addEventListener('click', (e) => {
+      e.preventDefault();
+      editorTabs.querySelectorAll('.emoji-tab-btn').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      activeEditorEmojiCategory = tab.dataset.cat || 'smileys';
+      const searchInput = document.getElementById('editor-emoji-search');
+      if (searchInput) searchInput.value = '';
+      renderEditorEmojiGrid();
+    });
+  });
+
+  editorQuick?.querySelectorAll('.emoji-quick-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const char = btn.dataset.emoji;
+      if (char) {
+        insertEmojiIntoEditor(char);
+        toggleEditorEmojiPopover(false);
+      }
+    });
+  });
+
+  // Cerrar popovers al hacer clic fuera
+  document.addEventListener('click', (e) => {
+    const editorPopover = document.getElementById('editor-emoji-popover');
+    const btnToolbarEmoji = document.getElementById('btn-toolbar-emoji');
+    if (editorPopover && editorPopover.style.display !== 'none') {
+      if (!editorPopover.contains(e.target) && !btnToolbarEmoji?.contains(e.target)) {
+        toggleEditorEmojiPopover(false);
+      }
+    }
+
+    const chatPicker = document.getElementById('chat-emoji-picker');
+    const btnChat = document.getElementById('btn-chat-emoji');
+    const chatBar = document.getElementById('chat-message-form');
+    if (chatPicker && chatPicker.style.display !== 'none') {
+      if (!chatPicker.contains(e.target) && !btnChat?.contains(e.target) && !chatBar?.contains(e.target)) {
+        toggleChatEmojiPicker(false);
+      }
     }
   });
 }

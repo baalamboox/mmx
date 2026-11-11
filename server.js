@@ -24,8 +24,32 @@ import {
   getUserMcpSettings,
   setUserMcpEnabled,
   regenerateUserMcpToken,
-  validateMcpToken
+  validateMcpToken,
+  getUserById,
+  searchUsers,
+  createOrUpdatePublicShare,
+  removePublicShare,
+  createOrUpdateUserShare,
+  removeShareById,
+  getSharesForResource,
+  getSharesSharedWithUser,
+  getShareByToken,
+  verifySharePassword,
+  checkUserResourceAccess,
+  getUserSharedVaults,
+  setUserActiveSharedVault,
+  getSharedVaultById,
+  sendFriendRequest,
+  respondFriendRequest,
+  removeFriend,
+  getFriendships,
+  areFriends,
+  sendDirectMessage,
+  getDirectMessages,
+  markMessagesAsRead,
+  getUnreadMessagesSummary
 } from './auth-db.js';
+import { initWebSocketServer, sendToUser, broadcast, isUserOnline, getOnlineUsersCount, getOnlineUserIds } from './ws-server.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -143,6 +167,11 @@ function resolveUserVaultPath(user, vaultName, relativePath) {
     throw err;
   }
   return fullPath;
+}
+
+function resolveReqVaultPath(req, relativePath) {
+  const targetUser = req.userVault?.owner || req.user;
+  return resolveUserVaultPath(targetUser, req.userVault.name, relativePath);
 }
 
 // Mapa en memoria de claves activas por usuario y bóveda: `${userId}:${vaultName}` -> { key: Buffer, salt: Buffer }
@@ -294,9 +323,57 @@ async function decryptDirectory(dir, key) {
 // Middleware de verificación de bóveda y bloqueo para el usuario actual
 async function checkVaultLock(req, res, next) {
   try {
+    // Si el usuario tiene activa una bóveda compartida por otro usuario
+    if (req.user && req.user.active_shared_vault_id) {
+      const sharedVault = getSharedVaultById(req.user.active_shared_vault_id, req.user.id);
+      if (sharedVault) {
+        const ownerUser = getUserById(sharedVault.owner_id);
+        if (ownerUser) {
+          const isEncrypted = sharedVault.vault_encrypted === 1;
+          req.userVault = {
+            id: sharedVault.id,
+            name: sharedVault.vault_name,
+            isShared: true,
+            shareId: sharedVault.id,
+            permission: sharedVault.permission,
+            encrypted: isEncrypted,
+            salt: sharedVault.vault_salt,
+            verification_hash: sharedVault.vault_verification_hash,
+            owner: {
+              id: ownerUser.id,
+              username: ownerUser.username,
+              fullname: `${sharedVault.owner_nombres} ${sharedVault.owner_apellido_paterno}`.trim()
+            }
+          };
+          req.userVaultDir = getUserVaultDir(ownerUser, sharedVault.vault_name);
+          req.isSharedVault = true;
+          req.vaultPermission = sharedVault.permission;
+
+          const activeKey = getActiveVaultKey(req.user.id, `shared_${sharedVault.id}`)
+                         || getActiveVaultKey(req.user.id, sharedVault.vault_name)
+                         || getActiveVaultKey(ownerUser.id, sharedVault.vault_name);
+
+          if (isEncrypted && !activeKey) {
+            return res.status(423).json({
+              error: 'Bóveda compartida protegida. Ingrese la contraseña de la bóveda para acceder.',
+              locked: true,
+              vault: sharedVault.vault_name,
+              isShared: true,
+              shareId: sharedVault.id
+            });
+          }
+
+          req.userVaultKey = activeKey;
+          return next();
+        }
+      }
+    }
+
     const activeVault = await ensureUserVault(req.user);
     req.userVault = activeVault;
     req.userVaultDir = getUserVaultDir(req.user, activeVault.name);
+    req.isSharedVault = false;
+    req.vaultPermission = 'write';
 
     if (activeVault.encrypted) {
       const activeKey = getActiveVaultKey(req.user.id, activeVault.name);
@@ -696,6 +773,34 @@ app.post('/api/user/mcp-regenerate-token', requireAuth, (req, res) => {
 // 0. Obtener información y estado de cifrado de la bóveda activa del usuario
 app.get('/api/vault', requireAuth, async (req, res) => {
   try {
+    // Si tiene activa una bóveda compartida
+    if (req.user && req.user.active_shared_vault_id) {
+      const sharedVault = getSharedVaultById(req.user.active_shared_vault_id, req.user.id);
+      if (sharedVault) {
+        const ownerUser = getUserById(sharedVault.owner_id);
+        const vaultDir = getUserVaultDir(ownerUser, sharedVault.vault_name);
+        const isEncrypted = sharedVault.vault_encrypted === 1;
+        const activeKey = getActiveVaultKey(req.user.id, `shared_${sharedVault.id}`)
+                       || getActiveVaultKey(req.user.id, sharedVault.vault_name)
+                       || getActiveVaultKey(ownerUser.id, sharedVault.vault_name);
+        const isLocked = isEncrypted && !activeKey;
+
+        return res.json({
+          name: sharedVault.vault_name,
+          displayName: `${sharedVault.vault_name} (de @${sharedVault.owner_username})`,
+          path: vaultDir,
+          encrypted: isEncrypted,
+          locked: isLocked,
+          isShared: true,
+          permission: sharedVault.permission,
+          owner: {
+            username: sharedVault.owner_username,
+            fullname: `${sharedVault.owner_nombres} ${sharedVault.owner_apellido_paterno}`.trim()
+          }
+        });
+      }
+    }
+
     const activeVault = await ensureUserVault(req.user);
     const isEncrypted = !!activeVault.encrypted;
     const activeKey = getActiveVaultKey(req.user.id, activeVault.name);
@@ -704,9 +809,12 @@ app.get('/api/vault', requireAuth, async (req, res) => {
 
     res.json({
       name: activeVault.name,
+      displayName: activeVault.name,
       path: vaultDir,
       encrypted: isEncrypted,
-      locked: isLocked
+      locked: isLocked,
+      isShared: false,
+      permission: 'write'
     });
   } catch (err) {
     res.status(500).json({ error: 'Error al obtener bóveda activa', details: err.message });
@@ -717,27 +825,52 @@ app.get('/api/vault', requireAuth, async (req, res) => {
 app.post('/api/vault/unlock', requireAuth, async (req, res) => {
   try {
     const { password } = req.body;
-    const activeVault = await ensureUserVault(req.user);
+    let targetVault = null;
+    let isShared = false;
+    let shareId = null;
 
-    if (!activeVault.encrypted) {
-      return res.json({ success: true, message: 'La bóveda no está cifrada', locked: false, name: activeVault.name });
+    if (req.user && req.user.active_shared_vault_id) {
+      const sharedVault = getSharedVaultById(req.user.active_shared_vault_id, req.user.id);
+      if (sharedVault) {
+        isShared = true;
+        shareId = sharedVault.id;
+        targetVault = {
+          name: sharedVault.vault_name,
+          encrypted: sharedVault.vault_encrypted === 1,
+          salt: sharedVault.vault_salt,
+          verification_hash: sharedVault.vault_verification_hash
+        };
+      }
+    }
+
+    if (!targetVault) {
+      targetVault = await ensureUserVault(req.user);
+    }
+
+    if (!targetVault.encrypted) {
+      return res.json({ success: true, message: 'La bóveda no está cifrada', locked: false, name: targetVault.name });
     }
 
     if (!password) {
       return res.status(400).json({ error: 'La contraseña es requerida' });
     }
 
-    const salt = Buffer.from(activeVault.salt, 'hex');
+    const salt = Buffer.from(targetVault.salt, 'hex');
     const derivedKey = deriveKey(password, salt);
     const actualHash = createVerificationHash(derivedKey);
 
-    if (!crypto.timingSafeEqual(Buffer.from(actualHash, 'hex'), Buffer.from(activeVault.verification_hash, 'hex'))) {
+    if (!crypto.timingSafeEqual(Buffer.from(actualHash, 'hex'), Buffer.from(targetVault.verification_hash, 'hex'))) {
       return res.status(401).json({ error: 'Contraseña incorrecta' });
     }
 
-    setActiveVaultKey(req.user.id, activeVault.name, derivedKey, salt);
+    if (isShared) {
+      setActiveVaultKey(req.user.id, `shared_${shareId}`, derivedKey, salt);
+      setActiveVaultKey(req.user.id, targetVault.name, derivedKey, salt);
+    } else {
+      setActiveVaultKey(req.user.id, targetVault.name, derivedKey, salt);
+    }
 
-    res.json({ success: true, message: 'Bóveda desbloqueada con éxito', locked: false, name: activeVault.name });
+    res.json({ success: true, message: 'Bóveda desbloqueada con éxito', locked: false, name: targetVault.name, isShared });
   } catch (err) {
     res.status(500).json({ error: 'Error al desbloquear bóveda', details: err.message });
   }
@@ -746,6 +879,14 @@ app.post('/api/vault/unlock', requireAuth, async (req, res) => {
 // Bloquear bóveda activa (eliminar clave en memoria del usuario)
 app.post('/api/vault/lock', requireAuth, async (req, res) => {
   try {
+    if (req.user && req.user.active_shared_vault_id) {
+      const sharedVault = getSharedVaultById(req.user.active_shared_vault_id, req.user.id);
+      if (sharedVault) {
+        clearActiveVaultKey(req.user.id, `shared_${sharedVault.id}`);
+        clearActiveVaultKey(req.user.id, sharedVault.vault_name);
+        return res.json({ success: true, message: 'Bóveda compartida bloqueada', locked: true, name: sharedVault.vault_name, isShared: true });
+      }
+    }
     const activeVault = await ensureUserVault(req.user);
     clearActiveVaultKey(req.user.id, activeVault.name);
     res.json({ success: true, message: 'Bóveda bloqueada', locked: true, name: activeVault.name });
@@ -842,7 +983,7 @@ app.get('/api/vaults', requireAuth, async (req, res) => {
         fileCount = files.length;
       } catch {}
 
-      const isCurrent = !!v.is_active;
+      const isCurrent = !req.user.active_shared_vault_id && !!v.is_active;
       const activeKey = getActiveVaultKey(req.user.id, v.name);
       result.push({
         name: v.name,
@@ -850,18 +991,69 @@ app.get('/api/vaults', requireAuth, async (req, res) => {
         filesCount: fileCount,
         isActive: isCurrent,
         isEncrypted: !!v.encrypted,
-        isLocked: !!v.encrypted && (!isCurrent || !activeKey)
+        isLocked: !!v.encrypted && (!isCurrent || !activeKey),
+        isShared: false
       });
     }
 
-    const active = userVaults.find(v => v.is_active) || userVaults[0];
-    const activeKey = active ? getActiveVaultKey(req.user.id, active.name) : null;
+    // Bóvedas compartidas con este usuario
+    const sharedVaults = getUserSharedVaults(req.user.id);
+    const sharedResult = [];
+    for (const sv of sharedVaults) {
+      const ownerUser = getUserById(sv.owner.id);
+      let fileCount = 0;
+      let svPath = '';
+      if (ownerUser) {
+        svPath = getUserVaultDir(ownerUser, sv.vault_name);
+        try {
+          const files = await fs.readdir(svPath);
+          fileCount = files.length;
+        } catch {}
+      }
+
+      const isCurrent = req.user.active_shared_vault_id === sv.share_id;
+      const isEnc = sv.vault_encrypted === 1;
+      const svKey = getActiveVaultKey(req.user.id, `shared_${sv.share_id}`)
+                 || getActiveVaultKey(req.user.id, sv.vault_name)
+                 || getActiveVaultKey(sv.owner.id, sv.vault_name);
+      const isLoc = isEnc && !svKey;
+
+      sharedResult.push({
+        shareId: sv.share_id,
+        name: sv.vault_name,
+        displayName: `${sv.vault_name} (de @${sv.owner.username})`,
+        owner: sv.owner,
+        permission: sv.permission,
+        path: svPath,
+        filesCount: fileCount,
+        isActive: isCurrent,
+        isEncrypted: isEnc,
+        isLocked: isLoc,
+        isShared: true
+      });
+    }
+
+    const currentShared = req.user.active_shared_vault_id 
+      ? sharedResult.find(sv => sv.shareId === req.user.active_shared_vault_id)
+      : null;
+
+    const active = currentShared 
+      ? { name: currentShared.name, displayName: currentShared.displayName, isShared: true, permission: currentShared.permission }
+      : (userVaults.find(v => v.is_active) || userVaults[0]);
+
+    const activeKey = (!currentShared && active) ? getActiveVaultKey(req.user.id, active.name) : null;
+    const isEncrypted = currentShared ? currentShared.isEncrypted : !!active?.encrypted;
+    const isLocked = currentShared ? currentShared.isLocked : (!!active?.encrypted && !activeKey);
 
     res.json({
       active: active ? active.name : '',
-      encrypted: !!active?.encrypted,
-      locked: !!active?.encrypted && !activeKey,
-      vaults: result
+      displayName: active ? (active.displayName || active.name) : '',
+      isShared: !!currentShared,
+      permission: currentShared ? currentShared.permission : 'write',
+      encrypted: isEncrypted,
+      locked: isLocked,
+      vaults: result,
+      sharedVaults: sharedResult
     });
   } catch (err) {
     res.status(500).json({ error: 'Error al listar las bóvedas', details: err.message });
@@ -945,7 +1137,36 @@ app.delete('/api/vaults', requireAuth, async (req, res) => {
 // Cambiar la bóveda activa del usuario
 app.post('/api/vault/switch', requireAuth, async (req, res) => {
   try {
-    const { name } = req.body;
+    const { name, shareId } = req.body;
+
+    // Si se pasa shareId para cambiar a una bóveda compartida por otro usuario
+    if (shareId) {
+      const sharedVault = getSharedVaultById(Number(shareId), req.user.id);
+      if (!sharedVault) {
+        return res.status(404).json({ error: 'La bóveda compartida no existe o fue revocada' });
+      }
+      setUserActiveSharedVault(req.user.id, sharedVault.id);
+      const ownerUser = getUserById(sharedVault.owner_id);
+      const targetDir = getUserVaultDir(ownerUser, sharedVault.vault_name);
+      const isEncrypted = sharedVault.vault_encrypted === 1;
+      const hasKey = !!(getActiveVaultKey(req.user.id, `shared_${sharedVault.id}`)
+                     || getActiveVaultKey(req.user.id, sharedVault.vault_name)
+                     || getActiveVaultKey(ownerUser.id, sharedVault.vault_name));
+      const isLocked = isEncrypted && !hasKey;
+
+      return res.json({
+        success: true,
+        name: sharedVault.vault_name,
+        displayName: `${sharedVault.vault_name} (de @${sharedVault.owner_username})`,
+        isShared: true,
+        shareId: sharedVault.id,
+        permission: sharedVault.permission,
+        path: targetDir,
+        encrypted: isEncrypted,
+        locked: isLocked
+      });
+    }
+
     if (!name || typeof name !== 'string') {
       return res.status(400).json({ error: 'El nombre de la bóveda es requerido' });
     }
@@ -957,6 +1178,8 @@ app.post('/api/vault/switch', requireAuth, async (req, res) => {
       return res.status(404).json({ error: `La bóveda "${cleanName}" no existe en tu cuenta` });
     }
 
+    // Desactivar bóveda compartida activa si había alguna
+    setUserActiveSharedVault(req.user.id, null);
     setUserActiveVault(req.user.id, targetVault.name);
     const targetDir = getUserVaultDir(req.user, targetVault.name);
     const activeKey = getActiveVaultKey(req.user.id, targetVault.name);
@@ -964,6 +1187,9 @@ app.post('/api/vault/switch', requireAuth, async (req, res) => {
     res.json({
       success: true,
       name: targetVault.name,
+      displayName: targetVault.name,
+      isShared: false,
+      permission: 'write',
       path: targetDir,
       encrypted: !!targetVault.encrypted,
       locked: !!targetVault.encrypted && !activeKey
@@ -1026,13 +1252,17 @@ app.get('/api/folders', requireAuth, checkVaultLock, async (req, res) => {
 // 3. Crear una nueva subcarpeta en la bóveda del usuario
 app.post('/api/folders', requireAuth, checkVaultLock, async (req, res) => {
   try {
+    if (req.isSharedVault && req.vaultPermission !== 'write') {
+      return res.status(403).json({ error: 'Permiso denegado: esta bóveda compartida es de solo lectura.' });
+    }
+
     let { folder } = req.body;
     if (!folder) {
       return res.status(400).json({ error: 'El nombre de la carpeta es requerido' });
     }
 
     const cleanFolder = folder.replace(/[<>:"|?*]/g, '').trim();
-    const fullPath = resolveUserVaultPath(req.user, req.userVault.name, cleanFolder);
+    const fullPath = resolveReqVaultPath(req, cleanFolder);
 
     await fs.mkdir(fullPath, { recursive: true });
     res.json({ success: true, folder: cleanFolder.replace(/\\/g, '/') });
@@ -1044,12 +1274,16 @@ app.post('/api/folders', requireAuth, checkVaultLock, async (req, res) => {
 // 4. Eliminar una subcarpeta en la bóveda del usuario
 app.delete('/api/folders', requireAuth, checkVaultLock, async (req, res) => {
   try {
+    if (req.isSharedVault && req.vaultPermission !== 'write') {
+      return res.status(403).json({ error: 'Permiso denegado: esta bóveda compartida es de solo lectura.' });
+    }
+
     const folder = req.query.folder || req.body.folder;
     if (!folder) {
       return res.status(400).json({ error: 'La ruta de la carpeta es requerida' });
     }
 
-    const fullPath = resolveUserVaultPath(req.user, req.userVault.name, folder);
+    const fullPath = resolveReqVaultPath(req, folder);
     await fs.rm(fullPath, { recursive: true, force: true });
     res.json({ success: true, message: `Carpeta ${folder} eliminada.` });
   } catch (err) {
@@ -1061,7 +1295,7 @@ app.delete('/api/folders', requireAuth, checkVaultLock, async (req, res) => {
 app.get('/api/vault-raw/:path(*)', requireAuth, checkVaultLock, async (req, res) => {
   try {
     const rawPath = req.params.path;
-    const fullPath = resolveUserVaultPath(req.user, req.userVault.name, rawPath);
+    const fullPath = resolveReqVaultPath(req, rawPath);
     await fs.access(fullPath);
     const buf = await readVaultFileBuffer(fullPath, req.userVaultKey);
     const ext = path.extname(fullPath).toLowerCase();
@@ -1082,6 +1316,10 @@ app.get('/api/vault-raw/:path(*)', requireAuth, checkVaultLock, async (req, res)
 // 6. Subir archivo multimedia o documento a la bóveda del usuario
 app.post('/api/upload', requireAuth, checkVaultLock, async (req, res) => {
   try {
+    if (req.isSharedVault && req.vaultPermission !== 'write') {
+      return res.status(403).json({ error: 'Permiso denegado: esta bóveda compartida es de solo lectura.' });
+    }
+
     const { filename, folder, base64 } = req.body;
     if (!filename || !base64) {
       return res.status(400).json({ error: 'Se requiere nombre de archivo y contenido en base64' });
@@ -1090,7 +1328,7 @@ app.post('/api/upload', requireAuth, checkVaultLock, async (req, res) => {
     const cleanFolder = (folder || '').replace(/\\/g, '/').replace(/[<>:"|?*]/g, '').trim();
     const cleanName = path.basename(filename).replace(/[<>:"/\\|?*]/g, '').trim();
     const relativePath = cleanFolder ? `${cleanFolder}/${cleanName}` : cleanName;
-    const fullPath = resolveUserVaultPath(req.user, req.userVault.name, relativePath);
+    const fullPath = resolveReqVaultPath(req, relativePath);
 
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
 
@@ -1141,7 +1379,7 @@ app.get('/api/note', requireAuth, checkVaultLock, async (req, res) => {
 
     if (!path.extname(notePath)) notePath += '.md';
 
-    const fullPath = resolveUserVaultPath(req.user, req.userVault.name, notePath);
+    const fullPath = resolveReqVaultPath(req, notePath);
     const ext = path.extname(notePath).toLowerCase();
     const type = getFileType(ext);
     const folderRelative = path.dirname(notePath).replace(/\\/g, '/');
@@ -1247,6 +1485,10 @@ app.get('/api/notes/:path(*)', requireAuth, checkVaultLock, async (req, res) => 
 // 6. Crear o actualizar una nota
 app.post('/api/notes', requireAuth, checkVaultLock, async (req, res) => {
   try {
+    if (req.isSharedVault && req.vaultPermission !== 'write') {
+      return res.status(403).json({ error: 'Permiso denegado: esta bóveda compartida es de solo lectura.' });
+    }
+
     let { title, folder, content, path: customPath, oldPath } = req.body;
     if (!title && !customPath) {
       return res.status(400).json({ error: 'El título o ruta es requerido' });
@@ -1266,11 +1508,11 @@ app.post('/api/notes', requireAuth, checkVaultLock, async (req, res) => {
       relativePath = cleanFolder ? `${cleanFolder}/${safeTitle}.md` : `${safeTitle}.md`;
     }
 
-    const fullPath = resolveUserVaultPath(req.user, req.userVault.name, relativePath);
+    const fullPath = resolveReqVaultPath(req, relativePath);
 
     if (oldPath && oldPath !== relativePath) {
       try {
-        const oldFullPath = resolveUserVaultPath(req.user, req.userVault.name, oldPath);
+        const oldFullPath = resolveReqVaultPath(req, oldPath);
         await fs.unlink(oldFullPath);
       } catch {}
     }
@@ -1295,13 +1537,17 @@ app.post('/api/notes', requireAuth, checkVaultLock, async (req, res) => {
 // 8. Eliminar una nota o archivo multimedia
 app.delete(['/api/notes', '/api/notes/:path(*)'], requireAuth, checkVaultLock, async (req, res) => {
   try {
+    if (req.isSharedVault && req.vaultPermission !== 'write') {
+      return res.status(403).json({ error: 'Permiso denegado: esta bóveda compartida es de solo lectura.' });
+    }
+
     let notePath = req.query.path || req.params.path;
     if (!notePath) {
       return res.status(400).json({ error: 'Ruta de archivo requerida' });
     }
     if (!path.extname(notePath)) notePath += '.md';
 
-    const fullPath = resolveUserVaultPath(req.user, req.userVault.name, notePath);
+    const fullPath = resolveReqVaultPath(req, notePath);
     await fs.unlink(fullPath);
     res.json({ success: true, message: `Archivo ${notePath} eliminado.` });
   } catch (err) {
@@ -1439,6 +1685,956 @@ app.get('/api/search', requireAuth, checkVaultLock, async (req, res) => {
 });
 
 // ==========================================
+// RUTAS DEL SISTEMA PARA COMPARTIR (FASE 1)
+// ==========================================
+
+// 1. Buscar usuarios para compartir
+app.get('/api/users/search', requireAuth, (req, res) => {
+  try {
+    const q = req.query.q || '';
+    const users = searchUsers(q, req.user.id).map(u => ({
+      ...u,
+      is_online: isUserOnline(u.id)
+    }));
+    res.json({ users });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al buscar usuarios', details: err.message });
+  }
+});
+
+// 1.1 Obtener lista de IDs de usuarios en línea
+app.get('/api/users/online', requireAuth, (req, res) => {
+  res.json({ onlineUserIds: getOnlineUserIds() });
+});
+
+// 2. Obtener estado de compartición de un recurso específico
+app.get('/api/shares/resource', requireAuth, checkVaultLock, (req, res) => {
+  try {
+    const resourcePath = req.query.path || '';
+    const vaultName = req.userVault.name;
+    const shares = getSharesForResource(req.user.id, vaultName, resourcePath);
+    if (shares.userShares) {
+      shares.userShares = shares.userShares.map(s => ({
+        ...s,
+        user: {
+          ...s.user,
+          is_online: isUserOnline(s.user.id)
+        }
+      }));
+    }
+    res.json(shares);
+  } catch (err) {
+    res.status(500).json({ error: 'Error al obtener datos de compartición', details: err.message });
+  }
+});
+
+// 3. Crear / Actualizar / Desactivar enlace público
+app.post('/api/shares/public', requireAuth, checkVaultLock, (req, res) => {
+  try {
+    const { path: resourcePath, title, resource_type, enable, password, expires_at } = req.body;
+    const vaultName = req.userVault.name;
+    const cleanPath = (resourcePath || '').trim();
+
+    if (enable === false) {
+      removePublicShare({
+        owner_id: req.user.id,
+        vault_name: vaultName,
+        resource_path: cleanPath
+      });
+      return res.json({ success: true, enabled: false });
+    }
+
+    const defaultTitle = title || path.basename(cleanPath) || vaultName;
+
+    // Validar contraseña si se especificó
+    if (password !== undefined && password !== null && password !== '') {
+      if (typeof password !== 'string' || password.trim().length < 3) {
+        return res.status(400).json({ error: 'La contraseña de enlace debe tener al menos 3 caracteres.' });
+      }
+    }
+
+    // Validar expiración si se especificó
+    if (expires_at) {
+      const expDate = new Date(expires_at + (expires_at.includes('T') ? '' : 'T23:59:59'));
+      if (isNaN(expDate.getTime())) {
+        return res.status(400).json({ error: 'Fecha de expiración no válida.' });
+      }
+    }
+
+    const result = createOrUpdatePublicShare({
+      owner_id: req.user.id,
+      vault_name: vaultName,
+      resource_type: resource_type || (cleanPath ? 'file' : 'vault'),
+      resource_path: cleanPath,
+      resource_title: defaultTitle,
+      password,
+      expires_at
+    });
+
+    res.json({ success: true, enabled: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al configurar enlace público', details: err.message });
+  }
+});
+
+// 4. Compartir recurso con otro usuario de Kortexa
+app.post('/api/shares/user', requireAuth, checkVaultLock, (req, res) => {
+  try {
+    const { path: resourcePath, title, resource_type, target_user_id, permission } = req.body;
+    const targetUserId = parseInt(target_user_id, 10);
+    if (!targetUserId || isNaN(targetUserId)) {
+      return res.status(400).json({ error: 'Usuario destinatario inválido.' });
+    }
+
+    const targetUser = getUserById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'El usuario no existe.' });
+    }
+
+    const vaultName = req.userVault.name;
+    const cleanPath = (resourcePath || '').trim();
+    const defaultTitle = title || path.basename(cleanPath) || vaultName;
+
+    const finalResourceType = resource_type || (cleanPath ? 'file' : 'vault');
+    const finalPermission = permission === 'write' ? 'write' : 'read';
+
+    const userShareRecord = createOrUpdateUserShare({
+      owner_id: req.user.id,
+      vault_name: vaultName,
+      resource_type: finalResourceType,
+      resource_path: cleanPath,
+      resource_title: defaultTitle,
+      shared_with_user_id: targetUserId,
+      permission: finalPermission
+    });
+
+    // Notificar en tiempo real por WebSocket al usuario receptor
+    sendToUser(targetUserId, 'SHARE_RECEIVED', {
+      shareId: userShareRecord?.id,
+      title: defaultTitle,
+      path: cleanPath,
+      vault_name: vaultName,
+      resource_type: finalResourceType,
+      permission: finalPermission,
+      owner: {
+        id: req.user.id,
+        username: req.user.username,
+        nombre_completo: `${req.user.nombres || ''} ${req.user.apellido_paterno || ''}`.trim() || req.user.username
+      }
+    });
+
+    const shares = getSharesForResource(req.user.id, vaultName, cleanPath);
+    res.json({ success: true, userShares: shares.userShares });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Error al compartir con usuario' });
+  }
+});
+
+// 5. Eliminar / Revocar compartición por ID
+app.delete('/api/shares/:id', requireAuth, async (req, res) => {
+  try {
+    const shareId = parseInt(req.params.id, 10);
+    const db = (await import('./auth-db.js')).getAuthDb();
+    const existingShare = db.prepare('SELECT * FROM shares WHERE id = ? AND owner_id = ?').get(shareId, req.user.id);
+    const success = removeShareById(shareId, req.user.id);
+
+    if (success && existingShare && existingShare.shared_with_user_id) {
+      sendToUser(existingShare.shared_with_user_id, 'SHARE_REVOKED', {
+        shareId: existingShare.id,
+        title: existingShare.resource_title,
+        path: existingShare.resource_path,
+        resource_type: existingShare.resource_type,
+        owner: {
+          id: req.user.id,
+          username: req.user.username
+        }
+      });
+    }
+
+    res.json({ success });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al revocar compartición', details: err.message });
+  }
+});
+
+// 6. Listar todo lo que han compartido conmigo
+app.get('/api/shares/shared-with-me', requireAuth, (req, res) => {
+  try {
+    const items = getSharesSharedWithUser(req.user.id).map(item => ({
+      ...item,
+      owner: {
+        ...item.owner,
+        is_online: isUserOnline(item.owner.id)
+      }
+    }));
+    res.json({ items });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al listar recursos compartidos', details: err.message });
+  }
+});
+
+// 7. Leer una nota compartida por otro usuario
+app.get('/api/shared-notes/read', requireAuth, async (req, res) => {
+  try {
+    const shareId = parseInt(req.query.share_id, 10);
+    if (!shareId) return res.status(400).json({ error: 'Parámetro share_id requerido' });
+
+    const db = (await import('./auth-db.js')).getAuthDb();
+    const share = db.prepare(`
+      SELECT s.*, u.username as owner_username, u.nombres as owner_nombres, u.apellido_paterno as owner_apellido_paterno, u.id as owner_id
+      FROM shares s
+      JOIN users u ON s.owner_id = u.id
+      WHERE s.id = ? AND s.shared_with_user_id = ?
+    `).get(shareId, req.user.id);
+
+    if (!share) {
+      return res.status(404).json({ error: 'El recurso compartido no existe o fue revocado.' });
+    }
+
+    const ownerUser = getUserById(share.owner_id);
+    const subPath = (req.query.sub_path || '').replace(/\\/g, '/');
+    const relativeTarget = subPath ? path.join(share.resource_path || '', subPath) : share.resource_path;
+    const fullPath = resolveUserVaultPath(ownerUser, share.vault_name, relativeTarget);
+
+    if (!fsSync.existsSync(fullPath)) {
+      return res.status(404).json({ error: 'El archivo original ya no se encuentra en la bóveda del propietario.' });
+    }
+
+    let activeKey = getActiveVaultKey(req.user.id, `shared_${share.id}`)
+                 || getActiveVaultKey(req.user.id, share.vault_name)
+                 || getActiveVaultKey(ownerUser.id, share.vault_name);
+
+    if (!activeKey) {
+      const candidatePwd = req.headers['x-vault-password'] || req.query.pwd;
+      if (candidatePwd) {
+        const ownerVault = db.prepare('SELECT encrypted, salt, verification_hash FROM user_vaults WHERE user_id = ? AND name = ?').get(ownerUser.id, share.vault_name);
+        if (ownerVault && ownerVault.salt && ownerVault.verification_hash) {
+          const saltBuf = Buffer.from(ownerVault.salt, 'hex');
+          const derivedKey = deriveKey(candidatePwd, saltBuf);
+          const testHash = createVerificationHash(derivedKey);
+          if (crypto.timingSafeEqual(Buffer.from(testHash, 'hex'), Buffer.from(ownerVault.verification_hash, 'hex'))) {
+            activeKey = { key: derivedKey, salt: saltBuf };
+            setActiveVaultKey(req.user.id, `shared_${share.id}`, derivedKey, saltBuf);
+            setActiveVaultKey(req.user.id, share.vault_name, derivedKey, saltBuf);
+          }
+        }
+      }
+    }
+
+    const ext = path.extname(relativeTarget).toLowerCase();
+    const fileType = getFileType(ext);
+    const stats = await fs.stat(fullPath);
+
+    let content = '';
+    if (fileType === 'note') {
+      try {
+        content = await readVaultFileText(fullPath, activeKey);
+      } catch (readErr) {
+        if (readErr.code === 'LOCKED') {
+          return res.status(423).json({
+            error: 'El archivo pertenece a una bóveda cifrada protegida. Ingrese la contraseña de la bóveda para acceder.',
+            locked: true,
+            shareId: share.id,
+            vaultName: share.vault_name
+          });
+        }
+        throw readErr;
+      }
+    } else {
+      // Para archivos multimedia binarios (video, audio, imagen, pdf)
+      if (!activeKey) {
+        const ownerVault = db.prepare('SELECT encrypted, salt, verification_hash FROM user_vaults WHERE user_id = ? AND name = ?').get(ownerUser.id, share.vault_name);
+        if (ownerVault && ownerVault.encrypted === 1) {
+          return res.status(423).json({
+            error: 'El archivo multimedia pertenece a una bóveda cifrada protegida. Ingrese la contraseña de la bóveda para acceder.',
+            locked: true,
+            shareId: share.id,
+            vaultName: share.vault_name
+          });
+        }
+      }
+    }
+
+    const rawUrl = `/api/shared-notes/raw?share_id=${share.id}${subPath ? `&sub_path=${encodeURIComponent(subPath)}` : ''}`;
+
+    res.json({
+      shareId: share.id,
+      title: subPath ? path.basename(subPath, ext) : share.resource_title,
+      filename: relativeTarget,
+      sub_path: subPath,
+      resource_type: share.resource_type,
+      file_type: fileType,
+      ext,
+      size: stats.size,
+      url: rawUrl,
+      permission: share.permission,
+      content,
+      owner: {
+        id: ownerUser.id,
+        username: ownerUser.username,
+        nombre_completo: `${share.owner_nombres} ${share.owner_apellido_paterno}`.trim()
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al leer la nota compartida', details: err.message });
+  }
+});
+
+// Servir archivo multimedia o binario compartido entre usuarios de forma segura
+app.get('/api/shared-notes/raw', requireAuth, async (req, res) => {
+  try {
+    const shareId = parseInt(req.query.share_id, 10);
+    if (!shareId) return res.status(400).send('Parámetro share_id requerido');
+
+    const db = (await import('./auth-db.js')).getAuthDb();
+    const share = db.prepare(`
+      SELECT s.*, u.username as owner_username, u.id as owner_id
+      FROM shares s
+      JOIN users u ON s.owner_id = u.id
+      WHERE s.id = ? AND s.shared_with_user_id = ?
+    `).get(shareId, req.user.id);
+
+    if (!share) {
+      return res.status(404).send('Recurso compartido no encontrado o revocado');
+    }
+
+    const ownerUser = getUserById(share.owner_id);
+    const subPath = (req.query.sub_path || '').replace(/\\/g, '/');
+    const relativeTarget = subPath ? path.join(share.resource_path || '', subPath) : share.resource_path;
+    const fullPath = resolveUserVaultPath(ownerUser, share.vault_name, relativeTarget);
+
+    if (!fsSync.existsSync(fullPath)) {
+      return res.status(404).send('Archivo no encontrado');
+    }
+
+    let activeKey = getActiveVaultKey(req.user.id, `shared_${share.id}`)
+                 || getActiveVaultKey(req.user.id, share.vault_name)
+                 || getActiveVaultKey(ownerUser.id, share.vault_name);
+
+    if (!activeKey) {
+      const candidatePwd = req.headers['x-vault-password'] || req.query.pwd;
+      if (candidatePwd) {
+        const ownerVault = db.prepare('SELECT encrypted, salt, verification_hash FROM user_vaults WHERE user_id = ? AND name = ?').get(ownerUser.id, share.vault_name);
+        if (ownerVault && ownerVault.salt && ownerVault.verification_hash) {
+          const saltBuf = Buffer.from(ownerVault.salt, 'hex');
+          const derivedKey = deriveKey(candidatePwd, saltBuf);
+          const testHash = createVerificationHash(derivedKey);
+          if (crypto.timingSafeEqual(Buffer.from(testHash, 'hex'), Buffer.from(ownerVault.verification_hash, 'hex'))) {
+            activeKey = { key: derivedKey, salt: saltBuf };
+            setActiveVaultKey(req.user.id, `shared_${share.id}`, derivedKey, saltBuf);
+            setActiveVaultKey(req.user.id, share.vault_name, derivedKey, saltBuf);
+          }
+        }
+      }
+    }
+
+    let buffer;
+    try {
+      buffer = await readVaultFileBuffer(fullPath, activeKey);
+    } catch (readErr) {
+      if (readErr.code === 'LOCKED') {
+        return res.status(423).send('Bóveda bloqueada: se requiere la contraseña');
+      }
+      throw readErr;
+    }
+
+    const ext = path.extname(relativeTarget).toLowerCase();
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.type(ext);
+    res.send(buffer);
+  } catch (err) {
+    res.status(500).send('Error al servir archivo compartido');
+  }
+});
+
+// 8. Guardar cambios en una nota compartida (si tiene permiso 'write')
+app.post('/api/shared-notes/save', requireAuth, async (req, res) => {
+  try {
+    const { share_id, content, sub_path } = req.body;
+    const shareId = parseInt(share_id, 10);
+    if (!shareId) return res.status(400).json({ error: 'share_id requerido' });
+
+    const db = (await import('./auth-db.js')).getAuthDb();
+    const share = db.prepare(`
+      SELECT s.*, u.id as owner_id
+      FROM shares s
+      JOIN users u ON s.owner_id = u.id
+      WHERE s.id = ? AND s.shared_with_user_id = ?
+    `).get(shareId, req.user.id);
+
+    if (!share) {
+      return res.status(404).json({ error: 'El recurso compartido no existe o fue revocado.' });
+    }
+
+    if (share.permission !== 'write') {
+      return res.status(403).json({ error: 'Permiso denegado: solo tienes acceso de lectura a este recurso.' });
+    }
+
+    const ownerUser = getUserById(share.owner_id);
+    const subClean = (sub_path || '').replace(/\\/g, '/');
+    const relativeTarget = subClean ? path.join(share.resource_path || '', subClean) : share.resource_path;
+    const fullPath = resolveUserVaultPath(ownerUser, share.vault_name, relativeTarget);
+
+    let activeKey = getActiveVaultKey(req.user.id, `shared_${share.id}`)
+                 || getActiveVaultKey(req.user.id, share.vault_name)
+                 || getActiveVaultKey(ownerUser.id, share.vault_name);
+    const isEnc = fsSync.existsSync(fullPath) && isEncrypted(await fs.readFile(fullPath));
+
+    if (isEnc && !activeKey) {
+      return res.status(423).json({
+        error: 'No se puede guardar: la bóveda del propietario está cifrada y bloqueada.',
+        locked: true
+      });
+    }
+
+    await writeVaultFile(fullPath, content ?? '', isEnc, activeKey);
+
+    // Notificar en tiempo real al dueño de la nota
+    sendToUser(share.owner_id, 'NOTE_UPDATED', {
+      shareId: share.id,
+      title: share.resource_title,
+      sub_path: subClean,
+      user: {
+        id: req.user.id,
+        username: req.user.username,
+        nombre_completo: `${req.user.nombres || ''} ${req.user.apellido_paterno || ''}`.trim() || req.user.username
+      }
+    });
+
+    res.json({ success: true, message: 'Nota compartida guardada correctamente.' });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al guardar nota compartida', details: err.message });
+  }
+});
+
+// 8.1 Obtener árbol de notas y subcarpetas de una carpeta compartida
+app.get('/api/shared-folders/tree', requireAuth, async (req, res) => {
+  try {
+    const shareId = parseInt(req.query.share_id, 10);
+    if (!shareId) return res.status(400).json({ error: 'share_id requerido' });
+
+    const db = (await import('./auth-db.js')).getAuthDb();
+    const share = db.prepare(`
+      SELECT s.*, u.username as owner_username, u.nombres as owner_nombres, u.apellido_paterno as owner_apellido_paterno
+      FROM shares s
+      JOIN users u ON s.owner_id = u.id
+      WHERE s.id = ? AND s.shared_with_user_id = ? AND s.resource_type = 'folder'
+    `).get(shareId, req.user.id);
+
+    if (!share) {
+      return res.status(404).json({ error: 'La carpeta compartida no existe o fue revocada.' });
+    }
+
+    const ownerUser = getUserById(share.owner_id);
+    const folderDir = resolveUserVaultPath(ownerUser, share.vault_name, share.resource_path);
+
+    if (!fsSync.existsSync(folderDir)) {
+      return res.status(404).json({ error: 'La carpeta ya no existe en la bóveda del propietario.' });
+    }
+
+    const files = await getAllVaultFiles(folderDir, folderDir);
+    const folders = await getAllFolders(folderDir, folderDir);
+
+    res.json({
+      shareId: share.id,
+      folderName: share.resource_title,
+      folderPath: share.resource_path,
+      permission: share.permission,
+      owner: {
+        id: ownerUser.id,
+        username: ownerUser.username,
+        nombre_completo: `${share.owner_nombres} ${share.owner_apellido_paterno}`.trim()
+      },
+      files,
+      folders
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al obtener árbol de carpeta compartida', details: err.message });
+  }
+});
+
+// 9. API Pública para obtener contenido mediante share_token (Soporta archivos, carpetas y bóvedas)
+app.get('/api/public/share/:token', async (req, res) => {
+  try {
+    const token = req.params.token;
+    const share = getShareByToken(token);
+
+    if (!share) {
+      return res.status(404).json({ error: 'Enlace no encontrado o inválido.' });
+    }
+    if (share.expired) {
+      return res.status(410).json({ error: 'Este enlace de compartición ha expirado.', expired: true });
+    }
+
+    // Verificar si requiere contraseña
+    if (share.has_password) {
+      const authHeaderPwd = req.headers['x-share-password'] || req.query.pwd;
+      const isOk = verifySharePassword(token, authHeaderPwd);
+      if (!isOk) {
+        return res.json({
+          has_password: true,
+          requires_password: true,
+          title: share.resource_title,
+          resource_type: share.resource_type,
+          owner_fullname: share.owner_fullname,
+          owner_username: share.owner_username
+        });
+      }
+    }
+
+    const ownerUser = getUserById(share.owner_id);
+    const basePath = resolveUserVaultPath(ownerUser, share.vault_name, share.resource_path || '');
+
+    if (!fsSync.existsSync(basePath)) {
+      return res.status(404).json({ error: 'El recurso ya no existe en la bóveda de origen.' });
+    }
+
+    const db = (await import('./auth-db.js')).getAuthDb();
+    const ownerVault = db.prepare('SELECT encrypted, salt, verification_hash FROM user_vaults WHERE user_id = ? AND name = ?').get(ownerUser.id, share.vault_name);
+    const isVaultEncrypted = ownerVault && ownerVault.encrypted === 1;
+
+    let activeKey = getActiveVaultKey(ownerUser.id, share.vault_name)
+                 || getActiveVaultKey(`public_${token}`, share.vault_name);
+
+    if (isVaultEncrypted && !activeKey) {
+      const candidatePwd = req.headers['x-vault-password'] || req.query.vault_pwd;
+      if (candidatePwd && ownerVault.salt && ownerVault.verification_hash) {
+        const saltBuf = Buffer.from(ownerVault.salt, 'hex');
+        const candidateKey = deriveKey(candidatePwd, saltBuf);
+        const testHash = createVerificationHash(candidateKey);
+        if (crypto.timingSafeEqual(Buffer.from(testHash, 'hex'), Buffer.from(ownerVault.verification_hash, 'hex'))) {
+          activeKey = { key: candidateKey, salt: saltBuf };
+          setActiveVaultKey(`public_${token}`, share.vault_name, candidateKey, saltBuf);
+        }
+      }
+    }
+
+    if (isVaultEncrypted && !activeKey) {
+      return res.json({
+        has_password: share.has_password,
+        requires_password: false,
+        requires_vault_password: true,
+        vault_locked: true,
+        title: share.resource_title,
+        resource_type: share.resource_type,
+        owner: {
+          fullname: share.owner_fullname,
+          username: share.owner_username
+        }
+      });
+    }
+
+    // Si es una carpeta o bóveda y NO se pide un archivo específico -> Retornar lista/árbol de archivos
+    if (share.resource_type === 'folder' || share.resource_type === 'vault') {
+      const requestedFile = req.query.file;
+      if (!requestedFile) {
+        const allFiles = await getAllVaultFiles(basePath, basePath);
+        const allFolders = await getAllFolders(basePath, basePath);
+        return res.json({
+          has_password: share.has_password,
+          requires_password: false,
+          title: share.resource_title,
+          resource_type: share.resource_type,
+          files: allFiles.map(f => ({
+            title: f.title,
+            filename: f.filename,
+            folder: f.folder,
+            ext: f.ext,
+            type: f.type,
+            size: f.size
+          })),
+          folders: allFolders,
+          owner: {
+            fullname: share.owner_fullname,
+            username: share.owner_username
+          },
+          created_at: share.created_at,
+          expires_at: share.expires_at
+        });
+      }
+
+      // Si se pide un archivo específico dentro de la carpeta/bóveda
+      const subSafe = path.normalize(requestedFile).replace(/^(\.\.[\/\\])+/, '');
+      const targetFilePath = path.join(basePath, subSafe);
+      if (!targetFilePath.startsWith(basePath) || !fsSync.existsSync(targetFilePath)) {
+        return res.status(404).json({ error: 'El archivo solicitado no existe.' });
+      }
+
+      const ext = path.extname(targetFilePath).toLowerCase();
+      const type = getFileType(ext);
+      let content = null;
+      if (type === 'note') {
+        try {
+          content = await readVaultFileText(targetFilePath, activeKey);
+        } catch (err) {
+          if (err.code === 'LOCKED') {
+            return res.status(423).json({ error: 'El archivo pertenece a una bóveda cifrada protegida.', vault_locked: true });
+          }
+          throw err;
+        }
+      }
+
+      return res.json({
+        has_password: share.has_password,
+        requires_password: false,
+        title: type === 'note' ? path.basename(targetFilePath, ext) : path.basename(targetFilePath),
+        filename: subSafe,
+        resource_type: share.resource_type,
+        file_type: type,
+        ext,
+        content,
+        download_url: `/s/${token}/raw?file=${encodeURIComponent(subSafe)}`,
+        owner: {
+          fullname: share.owner_fullname,
+          username: share.owner_username
+        }
+      });
+    }
+
+    // Para archivo individual
+    const ext = path.extname(share.resource_path).toLowerCase();
+    const type = getFileType(ext);
+
+    let content = null;
+    if (type === 'note') {
+      try {
+        content = await readVaultFileText(basePath, activeKey);
+      } catch (err) {
+        if (err.code === 'LOCKED') {
+          return res.status(423).json({ error: 'El archivo pertenece a una bóveda cifrada protegida.', vault_locked: true });
+        }
+        throw err;
+      }
+    }
+
+    res.json({
+      has_password: share.has_password,
+      requires_password: false,
+      title: share.resource_title,
+      filename: share.resource_path,
+      resource_type: share.resource_type,
+      file_type: type,
+      ext,
+      content,
+      download_url: `/s/${token}/raw`,
+      owner: {
+        fullname: share.owner_fullname,
+        username: share.owner_username
+      },
+      created_at: share.created_at,
+      expires_at: share.expires_at
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al procesar enlace público', details: err.message });
+  }
+});
+
+// 10. Validar contraseña de un enlace público
+app.post('/api/public/share/:token/auth', (req, res) => {
+  try {
+    const token = req.params.token;
+    const { password } = req.body;
+    const ok = verifySharePassword(token, password);
+    if (!ok) {
+      return res.status(401).json({ error: 'Contraseña incorrecta', valid: false });
+    }
+    res.json({ success: true, valid: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al validar contraseña', details: err.message });
+  }
+});
+
+// 10.1 Validar contraseña de bóveda cifrada en un enlace público
+app.post('/api/public/share/:token/vault-auth', async (req, res) => {
+  try {
+    const token = req.params.token;
+    const { password } = req.body;
+    const share = getShareByToken(token);
+    if (!share || share.expired) {
+      return res.status(404).json({ error: 'Enlace no encontrado o expirado' });
+    }
+    const db = (await import('./auth-db.js')).getAuthDb();
+    const ownerVault = db.prepare('SELECT encrypted, salt, verification_hash FROM user_vaults WHERE user_id = ? AND name = ?').get(share.owner_id, share.vault_name);
+    if (!ownerVault || !ownerVault.encrypted) {
+      return res.json({ success: true, valid: true });
+    }
+    if (!password) {
+      return res.status(400).json({ error: 'Contraseña de la bóveda requerida', valid: false });
+    }
+    const saltBuf = Buffer.from(ownerVault.salt, 'hex');
+    const candidateKey = deriveKey(password, saltBuf);
+    const testHash = createVerificationHash(candidateKey);
+    if (!crypto.timingSafeEqual(Buffer.from(testHash, 'hex'), Buffer.from(ownerVault.verification_hash, 'hex'))) {
+      return res.status(401).json({ error: 'Contraseña de la bóveda incorrecta', valid: false });
+    }
+    setActiveVaultKey(`public_${token}`, share.vault_name, candidateKey, saltBuf);
+    res.json({ success: true, valid: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al verificar clave de bóveda', details: err.message });
+  }
+});
+
+// 11. Descargar o transmitir archivo crudo de un enlace público
+app.get('/s/:token/raw', async (req, res) => {
+  try {
+    const token = req.params.token;
+    const share = getShareByToken(token);
+    if (!share || share.expired) {
+      return res.status(404).send('Enlace no encontrado o expirado');
+    }
+
+    if (share.has_password) {
+      const authHeaderPwd = req.headers['x-share-password'] || req.query.pwd;
+      if (!verifySharePassword(token, authHeaderPwd)) {
+        return res.status(401).send('Acceso protegido por contraseña');
+      }
+    }
+
+    const ownerUser = getUserById(share.owner_id);
+    const basePath = resolveUserVaultPath(ownerUser, share.vault_name, share.resource_path || '');
+    let targetFile = basePath;
+
+    if (share.resource_type === 'folder' || share.resource_type === 'vault') {
+      const requestedFile = req.query.file;
+      if (!requestedFile) return res.status(400).send('Archivo no especificado');
+      const subSafe = path.normalize(requestedFile).replace(/^(\.\.[\/\\])+/, '');
+      targetFile = path.join(basePath, subSafe);
+      if (!targetFile.startsWith(basePath)) return res.status(403).send('Acceso no autorizado');
+    }
+
+    if (!fsSync.existsSync(targetFile)) {
+      return res.status(404).send('Archivo no encontrado');
+    }
+
+    let activeKey = getActiveVaultKey(ownerUser.id, share.vault_name)
+                 || getActiveVaultKey(`public_${token}`, share.vault_name);
+
+    if (!activeKey) {
+      const candidatePwd = req.headers['x-vault-password'] || req.query.vault_pwd;
+      const db = (await import('./auth-db.js')).getAuthDb();
+      const ownerVault = db.prepare('SELECT encrypted, salt, verification_hash FROM user_vaults WHERE user_id = ? AND name = ?').get(ownerUser.id, share.vault_name);
+      if (candidatePwd && ownerVault?.salt && ownerVault?.verification_hash) {
+        const saltBuf = Buffer.from(ownerVault.salt, 'hex');
+        const candidateKey = deriveKey(candidatePwd, saltBuf);
+        const testHash = createVerificationHash(candidateKey);
+        if (crypto.timingSafeEqual(Buffer.from(testHash, 'hex'), Buffer.from(ownerVault.verification_hash, 'hex'))) {
+          activeKey = { key: candidateKey, salt: saltBuf };
+          setActiveVaultKey(`public_${token}`, share.vault_name, candidateKey, saltBuf);
+        }
+      }
+    }
+
+    let buffer;
+    try {
+      buffer = await readVaultFileBuffer(targetFile, activeKey);
+    } catch (readErr) {
+      if (readErr.code === 'LOCKED') {
+        return res.status(423).send('Bóveda bloqueada: se requiere la contraseña para descifrar este archivo.');
+      }
+      throw readErr;
+    }
+
+    const ext = path.extname(targetFile).toLowerCase();
+    const mimeTypes = {
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.webp': 'image/webp',
+      '.gif': 'image/gif',
+      '.svg': 'image/svg+xml',
+      '.pdf': 'application/pdf',
+      '.mp4': 'video/mp4',
+      '.webm': 'video/webm',
+      '.mp3': 'audio/mpeg',
+      '.wav': 'audio/wav',
+      '.ogg': 'audio/ogg',
+      '.md': 'text/markdown; charset=utf-8',
+      '.txt': 'text/plain; charset=utf-8'
+    };
+
+    const contentType = mimeTypes[ext] || 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(path.basename(targetFile))}"`);
+    res.send(buffer);
+  } catch (err) {
+    res.status(500).send('Error al transmitir archivo');
+  }
+});
+
+// 12. Página de visualización pública amigable para /s/:token
+app.get('/s/:token', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'share-viewer.html'));
+});
+
+// ==========================================
+// 13. SISTEMA DE AMIGOS & CHAT DIRECTO EN TIEMPO REAL
+// ==========================================
+
+// 13.1 Listar amigos y solicitudes
+app.get('/api/friends', requireAuth, (req, res) => {
+  try {
+    const data = getFriendships(req.user.id);
+    data.friends = data.friends.map(f => ({
+      ...f,
+      user: {
+        ...f.user,
+        is_online: isUserOnline(f.user.id)
+      }
+    }));
+    data.incomingRequests = data.incomingRequests.map(r => ({
+      ...r,
+      from_user: {
+        ...r.from_user,
+        is_online: isUserOnline(r.from_user.id)
+      }
+    }));
+    data.outgoingRequests = data.outgoingRequests.map(r => ({
+      ...r,
+      to_user: {
+        ...r.to_user,
+        is_online: isUserOnline(r.to_user.id)
+      }
+    }));
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'Error al obtener lista de amigos', details: err.message });
+  }
+});
+
+// 13.2 Enviar solicitud de amistad
+app.post('/api/friends/request', requireAuth, (req, res) => {
+  try {
+    const { target_user_id } = req.body;
+    const targetUserId = parseInt(target_user_id, 10);
+    if (!targetUserId || isNaN(targetUserId)) {
+      return res.status(400).json({ error: 'ID de usuario destinatario inválido.' });
+    }
+
+    const result = sendFriendRequest(req.user.id, targetUserId);
+
+    if (result.autoAccepted) {
+      sendToUser(targetUserId, 'FRIEND_REQUEST_ACCEPTED', {
+        friend: {
+          id: req.user.id,
+          username: req.user.username,
+          nombre_completo: `${req.user.nombres || ''} ${req.user.apellido_paterno || ''}`.trim() || req.user.username
+        }
+      });
+      sendToUser(req.user.id, 'FRIEND_REQUEST_ACCEPTED', {
+        friend: result.friend
+      });
+    } else {
+      sendToUser(targetUserId, 'FRIEND_REQUEST_RECEIVED', {
+        requestId: result.id,
+        from_user: {
+          id: req.user.id,
+          username: req.user.username,
+          nombre_completo: `${req.user.nombres || ''} ${req.user.apellido_paterno || ''}`.trim() || req.user.username
+        }
+      });
+    }
+
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'Error al enviar solicitud de amistad' });
+  }
+});
+
+// 13.3 Responder solicitud de amistad (accept | reject)
+app.post('/api/friends/respond', requireAuth, (req, res) => {
+  try {
+    const { request_id, action } = req.body;
+    const requestId = parseInt(request_id, 10);
+    if (!requestId || !['accept', 'reject'].includes(action)) {
+      return res.status(400).json({ error: 'Parámetros request_id y action válidos requeridos.' });
+    }
+
+    const result = respondFriendRequest(requestId, req.user.id, action);
+
+    if (action === 'accept') {
+      sendToUser(result.sender_id, 'FRIEND_REQUEST_ACCEPTED', {
+        friend: {
+          id: req.user.id,
+          username: req.user.username,
+          nombre_completo: `${req.user.nombres || ''} ${req.user.apellido_paterno || ''}`.trim() || req.user.username
+        }
+      });
+    }
+
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'Error al responder solicitud de amistad' });
+  }
+});
+
+// 13.4 Eliminar amigo
+app.delete('/api/friends/:friendId', requireAuth, (req, res) => {
+  try {
+    const friendId = parseInt(req.params.friendId, 10);
+    const success = removeFriend(req.user.id, friendId);
+
+    if (success) {
+      sendToUser(friendId, 'FRIEND_REMOVED', {
+        friendId: req.user.id,
+        username: req.user.username
+      });
+    }
+
+    res.json({ success });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al eliminar amigo', details: err.message });
+  }
+});
+
+// 13.5 Obtener mensajes de chat con un amigo
+app.get('/api/chat/:friendId/messages', requireAuth, (req, res) => {
+  try {
+    const friendId = parseInt(req.params.friendId, 10);
+    const messages = getDirectMessages(req.user.id, friendId);
+    markMessagesAsRead(friendId, req.user.id);
+    res.json({ messages });
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'Error al obtener mensajes' });
+  }
+});
+
+// 13.6 Enviar mensaje de chat a un amigo
+app.post('/api/chat/:friendId/messages', requireAuth, (req, res) => {
+  try {
+    const friendId = parseInt(req.params.friendId, 10);
+    const { content } = req.body;
+
+    const message = sendDirectMessage(req.user.id, friendId, content);
+
+    // Notificar en tiempo real al amigo por WebSocket
+    sendToUser(friendId, 'CHAT_MESSAGE_RECEIVED', {
+      message: {
+        ...message,
+        sender: {
+          id: req.user.id,
+          username: req.user.username,
+          nombre_completo: `${req.user.nombres || ''} ${req.user.apellido_paterno || ''}`.trim() || req.user.username
+        }
+      }
+    });
+
+    res.json({ success: true, message });
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'Error al enviar mensaje' });
+  }
+});
+
+// 13.7 Resumen de mensajes no leídos
+app.get('/api/chat/unread', requireAuth, (req, res) => {
+  try {
+    const summary = getUnreadMessagesSummary(req.user.id);
+    res.json(summary);
+  } catch (err) {
+    res.status(500).json({ error: 'Error al obtener mensajes no leídos', details: err.message });
+  }
+});
+
+// ==========================================
 // INICIALIZACIÓN DEL SERVIDOR (HTTP / HTTPS)
 // ==========================================
 const CERTS_DIR = path.join(__dirname, 'certs');
@@ -1456,10 +2652,13 @@ if (useHttps) {
     };
 
     const server = https.createServer(sslOptions, app);
+    initWebSocketServer(server);
+
     server.listen(PORT, () => {
       console.log(`\n===========================================`);
       console.log(`🔒 Servidor Kortexa HTTPS (SSL/TLS) activo en:`);
       console.log(`👉 https://localhost:${PORT}`);
+      console.log(`⚡ Canal WebSocket activo en: wss://localhost:${PORT}/ws`);
       console.log(`📂 Raíz de bóvedas de usuarios: ${USER_VAULTS_ROOT}`);
       console.log(`📜 Certificados: ${KEY_PATH}`);
       console.log(`===========================================\n`);
@@ -1467,19 +2666,25 @@ if (useHttps) {
   } catch (sslErr) {
     console.error('Error al inicializar HTTPS con certificados:', sslErr.message);
     console.log('Iniciando en modo HTTP como respaldo...');
-    app.listen(PORT, () => {
+    const server = http.createServer(app);
+    initWebSocketServer(server);
+    server.listen(PORT, () => {
       console.log(`\n===========================================`);
       console.log(`🧠 Servidor Kortexa HTTP corriendo en:`);
       console.log(`👉 http://localhost:${PORT}`);
+      console.log(`⚡ Canal WebSocket activo en: ws://localhost:${PORT}/ws`);
       console.log(`📂 Raíz de bóvedas de usuarios: ${USER_VAULTS_ROOT}`);
       console.log(`===========================================\n`);
     });
   }
 } else {
-  app.listen(PORT, () => {
+  const server = http.createServer(app);
+  initWebSocketServer(server);
+  server.listen(PORT, () => {
     console.log(`\n===========================================`);
     console.log(`🧠 Servidor Kortexa HTTP corriendo en:`);
     console.log(`👉 http://localhost:${PORT}`);
+    console.log(`⚡ Canal WebSocket activo en: ws://localhost:${PORT}/ws`);
     console.log(`📂 Raíz de bóvedas de usuarios: ${USER_VAULTS_ROOT}`);
     console.log(`===========================================\n`);
   });
