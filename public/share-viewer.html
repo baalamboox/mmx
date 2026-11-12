@@ -14,6 +14,7 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 
   <style>
@@ -339,6 +340,7 @@
       border: 1px solid var(--border-subtle);
     }
     .markdown-body pre {
+      position: relative;
       background: var(--bg-base);
       border: 1px solid var(--border-subtle);
       border-radius: 10px;
@@ -350,6 +352,33 @@
       background: transparent;
       padding: 0;
       border: none;
+    }
+    .btn-copy-code {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 9px;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 6px;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-elevated);
+      color: var(--text-muted);
+      cursor: pointer;
+      opacity: 0.5;
+      transition: all 0.15s ease;
+      font-family: var(--font-sans);
+    }
+    .markdown-body pre:hover .btn-copy-code {
+      opacity: 1;
+    }
+    .btn-copy-code:hover {
+      color: var(--text-main);
+      border-color: var(--indigo-accent);
+      background: var(--bg-surface);
     }
     .markdown-body table {
       width: 100%;
@@ -374,6 +403,234 @@
       max-width: 100%;
       border-radius: 8px;
       margin: 14px 0;
+    }
+
+    /* Resaltado de texto ==texto== */
+    mark, mark.md-highlight {
+      background: rgba(234, 179, 8, 0.28);
+      color: #fde047;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-weight: 500;
+    }
+    [data-theme="light"] mark, [data-theme="light"] mark.md-highlight {
+      background: rgba(234, 179, 8, 0.35);
+      color: #854d0e;
+    }
+
+    /* Listas de verificación / Checklists (- [ ] / - [x]) */
+    .markdown-body ul:has(.task-list-item),
+    .markdown-body ul.contains-task-list {
+      list-style: none;
+      padding-left: 2px;
+    }
+    .markdown-body .task-list-item {
+      list-style-type: none;
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .markdown-body .task-list-item input[type="checkbox"] {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      border: 1.5px solid var(--text-muted);
+      border-radius: 4px;
+      background: var(--bg-elevated);
+      display: inline-grid;
+      place-content: center;
+      cursor: default;
+      margin-right: 4px;
+      position: relative;
+      top: 2px;
+      flex-shrink: 0;
+    }
+    .markdown-body .task-list-item input[type="checkbox"]:checked {
+      background: var(--indigo-accent);
+      border-color: var(--indigo-accent);
+    }
+    .markdown-body .task-list-item input[type="checkbox"]:checked::before {
+      content: "";
+      width: 8px;
+      height: 4.5px;
+      border-left: 2px solid #fff;
+      border-bottom: 2px solid #fff;
+      transform: rotate(-45deg) translate(1px, -1px);
+    }
+
+    /* Callouts / Notas destacadas estilo Obsidian */
+    .callout {
+      margin: 1.25rem 0;
+      padding: 14px 18px;
+      border-radius: 10px;
+      border-left: 4px solid var(--callout-color, #38bdf8);
+      background: var(--callout-bg, rgba(56, 189, 248, 0.07));
+      border-top: 1px solid var(--border-subtle);
+      border-right: 1px solid var(--border-subtle);
+      border-bottom: 1px solid var(--border-subtle);
+      transition: all 0.2s ease;
+    }
+    .callout-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 13.5px;
+      color: var(--callout-color, var(--text-main));
+      margin-bottom: 6px;
+    }
+    .callout-title .callout-icon {
+      font-size: 16px;
+      line-height: 1;
+    }
+    .callout-content {
+      font-size: 14px;
+      line-height: 1.65;
+      color: var(--text-main);
+    }
+    .callout-content p:last-child {
+      margin-bottom: 0;
+    }
+
+    /* Ecuaciones Matemáticas KaTeX (LaTeX) */
+    .katex-display-wrapper {
+      margin: 1.3em 0;
+      padding: 14px 18px;
+      background: rgba(99, 102, 241, 0.04);
+      border: 1px solid rgba(99, 102, 241, 0.15);
+      border-radius: 8px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      text-align: center;
+      transition: all 0.2s ease;
+    }
+    .katex-display-wrapper:hover {
+      background: rgba(99, 102, 241, 0.08);
+      border-color: rgba(99, 102, 241, 0.35);
+      box-shadow: 0 0 14px rgba(99, 102, 241, 0.12);
+    }
+    [data-theme="light"] .katex-display-wrapper {
+      background: rgba(99, 102, 241, 0.03);
+      border-color: rgba(99, 102, 241, 0.2);
+    }
+    .katex-inline-wrapper {
+      padding: 0 4px;
+      font-size: 1.05em;
+      vertical-align: -0.05em;
+    }
+    .katex-error-wrapper {
+      color: #f87171;
+      background: rgba(239, 68, 68, 0.1);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+    .katex-fallback {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      background: var(--bg-elevated);
+      padding: 10px;
+      border-radius: 6px;
+    }
+
+    /* Contenedor adaptativo de Tablas */
+    .table-responsive-wrapper {
+      max-width: 100%;
+      overflow-x: auto;
+      margin: 18px 0;
+      border-radius: 8px;
+      border: 1px solid var(--border-subtle);
+    }
+    .table-responsive-wrapper table {
+      margin: 0;
+      width: 100%;
+      min-width: 440px;
+    }
+
+    /* Hojas de cálculo Excel Kortexa (FortuneSheet fallback) */
+    .fortunesheet-embedded-wrapper {
+      margin: 1.5rem 0;
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--bg-surface);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+    }
+    .fortunesheet-embedded-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .fortunesheet-badge {
+      font-size: 10px;
+      font-weight: 800;
+      padding: 2px 7px;
+      border-radius: 4px;
+      background: #10b981;
+      color: #fff;
+      letter-spacing: 0.5px;
+    }
+    .fortunesheet-embedded-title {
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+    .spreadsheet-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12.5px;
+      font-family: var(--font-sans);
+    }
+    .spreadsheet-table th, .spreadsheet-table td {
+      border: 1px solid var(--border-subtle);
+      padding: 8px 12px;
+      text-align: left;
+    }
+    .spreadsheet-table th {
+      background: rgba(255, 255, 255, 0.04);
+      font-weight: 600;
+      color: var(--text-main);
+    }
+    [data-theme="light"] .spreadsheet-table th {
+      background: rgba(0, 0, 0, 0.03);
+    }
+
+    /* Chips de Wikilinks y Tarjetas de Notas Incrustadas */
+    .wikilink-badge {
+      background: rgba(99, 102, 241, 0.15);
+      color: #818cf8;
+      padding: 2px 7px;
+      border-radius: 5px;
+      font-weight: 500;
+      font-size: 0.95em;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      text-decoration: none;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .wikilink-badge:hover {
+      background: rgba(99, 102, 241, 0.28);
+      color: #a5b4fc;
+      transform: translateY(-1px);
+    }
+    .embedded-note-card {
+      margin: 14px 0;
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: rgba(99, 102, 241, 0.06);
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      display: inline-flex;
+      align-items: center;
     }
 
     /* Modal / Formulario de Contraseña */
@@ -453,6 +710,134 @@
     }
     .error-card h2 { font-size: 24px; margin-bottom: 10px; }
     .error-card p { color: var(--text-muted); margin-bottom: 20px; }
+
+    /* Estilos para Diagramas Mermaid */
+    .mermaid-wrapper {
+      position: relative;
+      margin: 1.75rem 0;
+      padding: 24px 16px 16px 16px;
+      background: rgba(15, 23, 42, 0.45);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    [data-theme="light"] .mermaid-wrapper {
+      background: #f8fafc;
+      border-color: #e2e8f0;
+    }
+
+    .mermaid-wrapper:hover {
+      border-color: rgba(99, 102, 241, 0.35);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    }
+
+    .mermaid-wrapper.is-fullscreen {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: var(--bg-base);
+      margin: 0;
+      border-radius: 0;
+      padding: 50px 24px 24px;
+      overflow: auto;
+      border: none;
+      box-shadow: none;
+      justify-content: center;
+    }
+    .mermaid-wrapper.is-fullscreen .mermaid-toolbar {
+      top: 14px;
+      right: 18px;
+      padding: 5px 8px;
+      opacity: 0.95;
+    }
+
+    .mermaid-toolbar {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(13, 20, 36, 0.85);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 3px 5px;
+      z-index: 10;
+      opacity: 0.6;
+      transition: opacity 0.2s ease;
+    }
+
+    [data-theme="light"] .mermaid-toolbar {
+      background: rgba(255, 255, 255, 0.9);
+      border-color: #cbd5e1;
+    }
+
+    .mermaid-wrapper:hover .mermaid-toolbar {
+      opacity: 1;
+    }
+
+    .mermaid-tool-btn {
+      width: 26px;
+      height: 26px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 13px;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+
+    .mermaid-tool-btn:hover {
+      background: rgba(99, 102, 241, 0.15);
+      color: #818cf8;
+    }
+
+    .mermaid-viewport {
+      overflow-x: auto;
+      max-width: 100%;
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      transform-origin: center top;
+      padding: 8px 0;
+    }
+
+    .mermaid-viewport .mermaid {
+      display: flex;
+      justify-content: center;
+      width: 100%;
+    }
+
+    .mermaid-viewport svg {
+      max-width: 100%;
+      height: auto;
+      font-family: var(--font-sans) !important;
+    }
+
+    .mermaid-error-box {
+      padding: 12px 16px;
+      border-radius: 8px;
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.25);
+      color: #f87171;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      white-space: pre-wrap;
+      text-align: left;
+      width: 100%;
+    }
 
     footer.viewer-footer {
       text-align: center;
@@ -597,6 +982,13 @@
       document.documentElement.setAttribute('data-theme', currentTheme);
       localStorage.setItem('kortexa-public-theme', currentTheme);
       themeIcon.textContent = currentTheme === 'dark' ? '☀️' : '🌙';
+
+      // Re-renderizar diagramas adaptando los colores del tema seleccionado
+      document.querySelectorAll('.mermaid').forEach(el => el.removeAttribute('data-processed'));
+      const singleMd = document.getElementById('markdown-render');
+      const colMd = document.getElementById('col-markdown-render');
+      if (singleMd) renderMermaidDiagrams(singleMd);
+      if (colMd) renderMermaidDiagrams(colMd);
     });
 
     // Copiar enlace
@@ -610,14 +1002,40 @@
       });
     });
 
-    // Extracción de token de URL: /s/:token
-    const pathParts = window.location.pathname.split('/');
+    // Extracción de token de URL: /s/:token (robusto ante slashes finales)
+    const pathParts = window.location.pathname.split('/').filter(Boolean);
     const token = pathParts[pathParts.length - 1];
 
     let cachedPassword = null;
     let cachedVaultPassword = null;
     let isVaultPasswordMode = false;
     let collectionFiles = [];
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function getAuthorizedMediaUrl(url) {
+      if (!url) return '';
+      let fullUrl = url;
+      const params = [];
+      if (cachedPassword && !fullUrl.includes('pwd=')) {
+        params.push(`pwd=${encodeURIComponent(cachedPassword)}`);
+      }
+      if (cachedVaultPassword && !fullUrl.includes('vault_pwd=')) {
+        params.push(`vault_pwd=${encodeURIComponent(cachedVaultPassword)}`);
+      }
+      if (params.length > 0) {
+        fullUrl += (fullUrl.includes('?') ? '&' : '?') + params.join('&');
+      }
+      return fullUrl;
+    }
 
     async function loadSharedDoc(password = null, vaultPassword = null) {
       const spinner = document.getElementById('loading-spinner');
@@ -671,9 +1089,10 @@
         }
 
       } catch (err) {
+        console.error('Error al cargar contenido compartido:', err);
         spinner.style.display = 'none';
         errorContainer.style.display = 'block';
-        document.getElementById('error-desc').textContent = 'Ocurrió un error al cargar el contenido del enlace.';
+        document.getElementById('error-desc').textContent = err.message || 'Ocurrió un error al cargar el contenido del enlace.';
       }
     }
 
@@ -692,7 +1111,7 @@
       }
 
       const downloadBtn = document.getElementById('btn-download-raw');
-      downloadBtn.href = data.download_url;
+      downloadBtn.href = getAuthorizedMediaUrl(data.download_url);
       downloadBtn.style.display = 'inline-flex';
 
       renderDocumentBody(data, document.getElementById('markdown-render'), document.getElementById('media-render'), document.getElementById('doc-type-badge'));
@@ -775,7 +1194,7 @@
         document.title = `${fileData.title || filename} — Kortexa`;
 
         const downloadBtn = document.getElementById('btn-download-raw');
-        downloadBtn.href = fileData.download_url;
+        downloadBtn.href = getAuthorizedMediaUrl(fileData.download_url);
         downloadBtn.style.display = 'inline-flex';
 
         renderDocumentBody(fileData, document.getElementById('col-markdown-render'), document.getElementById('col-media-render'), document.getElementById('col-doc-type-badge'));
@@ -788,7 +1207,7 @@
       if (data.file_type === 'note') {
         mdContainer.style.display = 'block';
         mediaContainer.style.display = 'none';
-        if (badgeEl) badgeEl.textContent = 'Documento Markdown';
+        if (badgeEl) badgeEl.textContent = 'Documento Renderizado';
 
         // Protección contra bytes cifrados crudos KENC
         if (typeof data.content === 'string' && (data.content.startsWith('KENC') || (data.content.charCodeAt(0) === 0x4b && data.content.charCodeAt(1) === 0x45 && data.content.charCodeAt(2) === 0x4e && data.content.charCodeAt(3) === 0x43))) {
@@ -805,33 +1224,551 @@
           return;
         }
 
+        let raw = data.content || '';
+
+        // =========================================================================
+        // PRE-PROCESAMIENTO DE ELEMENTOS ENRIQUECIDOS (PARIDAD COMPLETA CON APP.JS)
+        // =========================================================================
+
+        // 1. Extracción de Diagramas Mermaid (```mermaid ... ``` o sintaxis equivalente)
+        const mermaidBlocks = [];
+        raw = raw.replace(/```(?:mermaid|flowchart|sequenceDiagram|classDiagram|erDiagram|gantt|mindmap)\s*([\s\S]*?)```/gi, (match) => {
+          let code = match.replace(/^```[a-z]*\s*/i, '').replace(/```$/i, '').trim();
+          const firstWord = match.split('\n')[0].replace('```', '').trim().toLowerCase();
+          if (firstWord && firstWord !== 'mermaid' && !code.toLowerCase().startsWith(firstWord)) {
+            code = `${firstWord}\n${code}`;
+          }
+          const placeholder = `%%KORTEXA_MERMAID_BLOCK_${mermaidBlocks.length}%%`;
+          mermaidBlocks.push(code);
+          return `\n\n${placeholder}\n\n`;
+        });
+
+        // 2. Extracción de Ecuaciones Matemáticas KaTeX (LaTeX) para protegerlas del parser Markdown
+        const mathBlocks = [];
+        raw = raw.replace(/\$\$([\s\S]*?)\$\$/g, (match, expr) => {
+          const placeholder = `%%KORTEXA_MATH_BLOCK_${mathBlocks.length}%%`;
+          mathBlocks.push(expr);
+          return `\n\n${placeholder}\n\n`;
+        });
+
+        const mathInlines = [];
+        raw = raw.replace(/(?<!\\)\$([^\$\n]+?)(?<!\\)\$/g, (match, expr) => {
+          const placeholder = `%%KORTEXA_MATH_INLINE_${mathInlines.length}%%`;
+          mathInlines.push(expr);
+          return placeholder;
+        });
+
+        // 3. Incrustaciones tipo Obsidian: ![[archivo.ext]] o ![[archivo.ext|300]]
+        raw = raw.replace(/!\[\[(.*?)\]\]/g, (match, rawInner) => {
+          let target = rawInner.trim();
+          let widthStyle = '';
+          if (target.includes('|')) {
+            const parts = target.split('|');
+            target = parts[0].trim();
+            const param = parts[1].trim();
+            if (/^\d+$/.test(param)) {
+              widthStyle = `width: ${param}px; max-width: 100%;`;
+            }
+          }
+
+          const ext = (target.match(/\.[0-9a-z]+$/i) || [''])[0].toLowerCase();
+          const imgExts = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.bmp', '.ico'];
+          const vidExts = ['.mp4', '.webm', '.ogv', '.mov', '.mkv'];
+          const audExts = ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac', '.weba', '.opus'];
+          const pdfExts = ['.pdf'];
+
+          // En carpeta/bóveda compartida se solicita por query ?file=, en recurso individual puede ser el mismo target
+          let mediaUrl = `/s/${token}/raw?file=${encodeURIComponent(target)}`;
+          mediaUrl = getAuthorizedMediaUrl(mediaUrl);
+
+          if (imgExts.includes(ext)) {
+            return `<div class="embedded-media-block" style="text-align: center; margin: 16px 0;"><img src="${mediaUrl}" alt="${escapeHtml(target)}" style="${widthStyle || 'max-width: 100%; border-radius: 8px;'}" class="embedded-media-img" loading="lazy" /></div>`;
+          } else if (vidExts.includes(ext)) {
+            return `<div class="embedded-media-block" style="margin: 16px 0; max-width: 800px; margin-left: auto; margin-right: auto;"><video controls preload="metadata" playsinline src="${mediaUrl}" style="${widthStyle || 'width: 100%; border-radius: 8px; background: #000;'}" class="embedded-media-video"><p>Tu navegador no puede reproducir este video.</p></video></div>`;
+          } else if (audExts.includes(ext)) {
+            return `<div class="embedded-media-block embedded-audio-block" style="margin: 14px 0; background: rgba(255, 255, 255, 0.03); padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border-subtle); max-width: 600px;"><audio controls preload="metadata" src="${mediaUrl}" style="width: 100%;" class="embedded-media-audio"><p>Tu navegador no puede reproducir este audio.</p></audio><span class="embedded-caption" style="display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 6px;">🎧 ${escapeHtml(target)}</span></div>`;
+          } else if (pdfExts.includes(ext)) {
+            return `<div class="embedded-media-block embedded-pdf-block" style="margin: 16px 0;"><iframe src="${mediaUrl}" style="width: 100%; height: 600px; border: 1px solid var(--border-subtle); border-radius: 8px;"></iframe></div>`;
+          }
+
+          // Si es una nota incrustada o referencia a nota
+          return `<div class="embedded-note-card"><a class="wikilink-badge" data-target="${escapeHtml(target)}" href="#">📄 [[${escapeHtml(target)}]]</a></div>`;
+        });
+
+        // 4. Wikilinks estándar [[Nombre]]
+        raw = raw.replace(/\[\[(.*?)\]\]/g, (m, name) => {
+          const cleanName = name.trim();
+          return `<a href="#" class="wikilink-badge" data-target="${escapeHtml(cleanName)}" title="Abrir: ${escapeHtml(cleanName)}">🔗 ${escapeHtml(cleanName)}</a>`;
+        });
+
+        // 5. Resaltado ==texto== (estilo Obsidian)
+        raw = raw.replace(/==([^=\n]+)==/g, '<mark class="md-highlight">$1</mark>');
+
+        // =========================================================================
+        // PARSEO MARKDOWN CON MARKED
+        // =========================================================================
         if (window.marked) {
-          mdContainer.innerHTML = marked.parse(data.content || '');
-          if (window.renderMathInElement) renderMathInElement(mdContainer);
-          if (window.mermaid) mermaid.run({ querySelector: '.mermaid' }).catch(() => {});
+          try {
+            window.marked.setOptions({ gfm: true, breaks: true });
+          } catch (e) {}
+
+          let parsedHtml = marked.parse(raw);
+
+          // Reinsertar Diagramas Mermaid con contenedor interactivo y herramientas
+          mermaidBlocks.forEach((code, idx) => {
+            const placeholder = `%%KORTEXA_MERMAID_BLOCK_${idx}%%`;
+            const diagramId = `mermaid-diag-${idx}-${Math.random().toString(36).substring(2, 7)}`;
+            const wrapperHtml = `
+              <div class="mermaid-wrapper" data-diagram-id="${diagramId}">
+                <div class="mermaid-toolbar">
+                  <button type="button" class="mermaid-tool-btn btn-diagram-zoom-in" title="Acercar (+)">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                  </button>
+                  <button type="button" class="mermaid-tool-btn btn-diagram-zoom-out" title="Alejar (-)">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                  </button>
+                  <button type="button" class="mermaid-tool-btn btn-diagram-zoom-reset" title="Restablecer (100%)">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                  </button>
+                  <button type="button" class="mermaid-tool-btn btn-diagram-fullscreen" title="Pantalla Completa (⛶)">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+                  </button>
+                </div>
+                <div class="mermaid-viewport">
+                  <div class="mermaid" id="${diagramId}" data-code="${encodeURIComponent(code)}">${escapeHtml(code)}</div>
+                </div>
+              </div>`;
+            parsedHtml = parsedHtml.replace(new RegExp(`<p>\\s*${placeholder}\\s*<\\/p>`, 'g'), () => wrapperHtml);
+            parsedHtml = parsedHtml.replace(placeholder, () => wrapperHtml);
+          });
+
+          // Reinsertar Ecuaciones en Bloque KaTeX
+          mathBlocks.forEach((expr, idx) => {
+            const placeholder = `%%KORTEXA_MATH_BLOCK_${idx}%%`;
+            let rendered = '';
+            if (window.katex) {
+              try {
+                rendered = `<div class="katex-display-wrapper">${window.katex.renderToString(expr.trim(), { displayMode: true, throwOnError: false })}</div>`;
+              } catch (err) {
+                rendered = `<div class="katex-error-wrapper">Error LaTeX: ${escapeHtml(expr)}</div>`;
+              }
+            } else {
+              rendered = `<pre class="katex-fallback">$$${escapeHtml(expr)}$$</pre>`;
+            }
+            parsedHtml = parsedHtml.replace(new RegExp(`<p>\\s*${placeholder}\\s*<\\/p>`, 'g'), () => rendered);
+            parsedHtml = parsedHtml.replace(placeholder, () => rendered);
+          });
+
+          // Reinsertar Ecuaciones en Línea KaTeX
+          mathInlines.forEach((expr, idx) => {
+            const placeholder = `%%KORTEXA_MATH_INLINE_${idx}%%`;
+            let rendered = '';
+            if (window.katex) {
+              try {
+                rendered = `<span class="katex-inline-wrapper">${window.katex.renderToString(expr.trim(), { displayMode: false, throwOnError: false })}</span>`;
+              } catch (err) {
+                rendered = `<span class="katex-error-wrapper">$${escapeHtml(expr)}$</span>`;
+              }
+            } else {
+              rendered = `<code class="katex-fallback">$${escapeHtml(expr)}$</code>`;
+            }
+            parsedHtml = parsedHtml.replace(placeholder, () => rendered);
+          });
+
+          mdContainer.innerHTML = parsedHtml;
+
+          // =========================================================================
+          // POST-PROCESAMIENTO DOM (CALLOUTS, MEDIA, SPREADSHEETS, TABLAS, CÓDIGO)
+          // =========================================================================
+          processCalloutsInContainer(mdContainer);
+          processSpreadsheetsInContainer(mdContainer);
+          processCodeBlocksInContainer(mdContainer);
+          processMediaInContainer(mdContainer);
+          processTablesInContainer(mdContainer);
+          processWikilinksInContainer(mdContainer);
+
+          // Renderizar Diagramas Mermaid interactivos
+          renderMermaidDiagrams(mdContainer);
         } else {
-          mdContainer.textContent = data.content;
+          mdContainer.textContent = raw;
         }
       } else if (data.file_type === 'image') {
         mdContainer.style.display = 'none';
         mediaContainer.style.display = 'block';
         if (badgeEl) badgeEl.textContent = 'Imagen';
-        mediaContainer.innerHTML = `<div style="text-align: center;"><img src="${data.download_url}" style="max-width: 100%; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.2);"></div>`;
+        const mediaSrc = getAuthorizedMediaUrl(data.download_url);
+        mediaContainer.innerHTML = `<div style="text-align: center;"><img src="${mediaSrc}" style="max-width: 100%; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.2);"></div>`;
       } else if (data.file_type === 'pdf') {
         mdContainer.style.display = 'none';
         mediaContainer.style.display = 'block';
         if (badgeEl) badgeEl.textContent = 'Documento PDF';
-        mediaContainer.innerHTML = `<iframe src="${data.download_url}" style="width: 100%; height: 750px; border: 1px solid var(--border-subtle); border-radius: 10px;"></iframe>`;
+        const mediaSrc = getAuthorizedMediaUrl(data.download_url);
+        mediaContainer.innerHTML = `<iframe src="${mediaSrc}" style="width: 100%; height: 750px; border: 1px solid var(--border-subtle); border-radius: 10px;"></iframe>`;
       } else if (data.file_type === 'video') {
         mdContainer.style.display = 'none';
         mediaContainer.style.display = 'block';
         if (badgeEl) badgeEl.textContent = 'Video';
-        mediaContainer.innerHTML = `<video controls src="${data.download_url}" style="width: 100%; border-radius: 10px;"></video>`;
+        const mediaSrc = getAuthorizedMediaUrl(data.download_url);
+        mediaContainer.innerHTML = `
+          <div style="max-width: 900px; margin: 0 auto; background: #000; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.4);">
+            <video controls preload="metadata" playsinline src="${mediaSrc}" style="width: 100%; display: block; max-height: 75vh;">
+              Tu navegador no soporta reproducción de video HTML5.
+            </video>
+          </div>`;
       } else if (data.file_type === 'audio') {
         mdContainer.style.display = 'none';
         mediaContainer.style.display = 'block';
         if (badgeEl) badgeEl.textContent = 'Audio';
-        mediaContainer.innerHTML = `<audio controls src="${data.download_url}" style="width: 100%; margin: 20px 0;"></audio>`;
+        const mediaSrc = getAuthorizedMediaUrl(data.download_url);
+        mediaContainer.innerHTML = `
+          <div style="max-width: 600px; margin: 40px auto; padding: 28px; background: var(--bg-card); border-radius: 14px; border: 1px solid var(--border-subtle); box-shadow: 0 4px 20px rgba(0,0,0,0.2); text-align: center;">
+            <div style="width: 60px; height: 60px; border-radius: 50%; background: rgba(99, 102, 241, 0.15); color: #818cf8; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto;">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+            </div>
+            <h3 style="font-size: 16px; margin-bottom: 20px; color: var(--text-main); font-weight: 600;">${escapeHtml(data.title || data.filename || 'Archivo de Audio')}</h3>
+            <audio controls preload="metadata" src="${mediaSrc}" style="width: 100%; outline: none;">
+              Tu navegador no soporta reproducción de audio HTML5.
+            </audio>
+          </div>`;
+      }
+    }
+
+    // =========================================================================
+    // PROCESADORES AUXILIARES DE RENDERIZADO MARKDOWN
+    // =========================================================================
+
+    // 1. Procesador de Callouts / Notas Admonition (GitHub y Obsidian)
+    function processCalloutsInContainer(container) {
+      const blockquotes = container.querySelectorAll('blockquote');
+      const typeMap = {
+        note: { icon: 'ℹ️', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.08)' },
+        info: { icon: 'ℹ️', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.08)' },
+        seealso: { icon: 'ℹ️', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.08)' },
+        tip: { icon: '💡', color: '#34d399', bg: 'rgba(52, 211, 153, 0.08)' },
+        hint: { icon: '💡', color: '#34d399', bg: 'rgba(52, 211, 153, 0.08)' },
+        important: { icon: '📌', color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.08)' },
+        success: { icon: '✅', color: '#10b981', bg: 'rgba(16, 185, 129, 0.08)' },
+        check: { icon: '✅', color: '#10b981', bg: 'rgba(16, 185, 129, 0.08)' },
+        done: { icon: '✅', color: '#10b981', bg: 'rgba(16, 185, 129, 0.08)' },
+        warning: { icon: '⚠️', color: '#fbbf24', bg: 'rgba(251, 191, 36, 0.08)' },
+        caution: { icon: '🛑', color: '#f87171', bg: 'rgba(248, 113, 113, 0.08)' },
+        attention: { icon: '⚠️', color: '#fbbf24', bg: 'rgba(251, 191, 36, 0.08)' },
+        danger: { icon: '🔥', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.08)' },
+        error: { icon: '🛑', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.08)' },
+        bug: { icon: '🐛', color: '#f87171', bg: 'rgba(248, 113, 113, 0.08)' },
+        failure: { icon: '❌', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.08)' },
+        fail: { icon: '❌', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.08)' },
+        missing: { icon: '❌', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.08)' },
+        question: { icon: '❓', color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.08)' },
+        help: { icon: '❓', color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.08)' },
+        faq: { icon: '❓', color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.08)' },
+        quote: { icon: '💬', color: '#94a3b8', bg: 'rgba(148, 163, 184, 0.08)' },
+        cite: { icon: '💬', color: '#94a3b8', bg: 'rgba(148, 163, 184, 0.08)' },
+        example: { icon: '🧪', color: '#818cf8', bg: 'rgba(129, 140, 248, 0.08)' },
+        summary: { icon: '📋', color: '#818cf8', bg: 'rgba(129, 140, 248, 0.08)' },
+        abstract: { icon: '📋', color: '#818cf8', bg: 'rgba(129, 140, 248, 0.08)' },
+        tldr: { icon: '📋', color: '#818cf8', bg: 'rgba(129, 140, 248, 0.08)' }
+      };
+
+      blockquotes.forEach(bq => {
+        const firstP = bq.querySelector('p');
+        if (!firstP) return;
+
+        const textMatch = firstP.innerHTML.match(/^\s*\[!([a-zA-Z]+)\](?:\s*([^\n<]*))?(?:<br\s*\/?>|\n)?([\s\S]*)$/i);
+        if (!textMatch) return;
+
+        const rawType = textMatch[1].toLowerCase();
+        const typeInfo = typeMap[rawType] || { icon: 'ℹ️', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.08)' };
+        const customTitle = (textMatch[2] || '').trim();
+        const titleText = customTitle || rawType.toUpperCase();
+        const remainingText = textMatch[3] || '';
+
+        const callout = document.createElement('div');
+        callout.className = `callout callout-${rawType}`;
+        callout.style.setProperty('--callout-color', typeInfo.color);
+        callout.style.setProperty('--callout-bg', typeInfo.bg);
+
+        const titleEl = document.createElement('div');
+        titleEl.className = 'callout-title';
+        titleEl.innerHTML = `<span class="callout-icon">${typeInfo.icon}</span> <span>${escapeHtml(titleText)}</span>`;
+        callout.appendChild(titleEl);
+
+        const bodyEl = document.createElement('div');
+        bodyEl.className = 'callout-content';
+
+        if (remainingText.trim()) {
+          firstP.innerHTML = remainingText;
+        } else {
+          firstP.remove();
+        }
+
+        while (bq.firstChild) {
+          bodyEl.appendChild(bq.firstChild);
+        }
+        callout.appendChild(bodyEl);
+
+        bq.parentNode.replaceChild(callout, bq);
+      });
+    }
+
+    // 2. Procesador de Hojas de Cálculo (FortuneSheet / Excel fallback)
+    function processSpreadsheetsInContainer(container) {
+      const codeBlocks = container.querySelectorAll('pre code');
+      codeBlocks.forEach(codeEl => {
+        const className = codeEl.className || '';
+        const isSheet = /\blanguage-(sheet|spreadsheet|excel|fortunesheet)\b/i.test(className);
+        if (!isSheet) return;
+        const preEl = codeEl.closest('pre');
+        if (!preEl) return;
+
+        const rawCode = codeEl.textContent.trim();
+        try {
+          let data = JSON.parse(rawCode);
+          let matrix = [];
+          if (Array.isArray(data) && data[0] && (data[0].celldata || data[0].data)) {
+            const sheet = data[0];
+            if (Array.isArray(sheet.data)) {
+              matrix = sheet.data.map(row => row ? row.map(c => (c && c.v !== undefined ? c.v : (c && c.m !== undefined ? c.m : ''))) : []);
+            } else if (Array.isArray(sheet.celldata)) {
+              const rows = [];
+              sheet.celldata.forEach(cell => {
+                const r = cell.r;
+                const c = cell.c;
+                if (!rows[r]) rows[r] = [];
+                rows[r][c] = cell.v ? (cell.v.v !== undefined ? cell.v.v : (cell.v.m !== undefined ? cell.v.m : cell.v)) : '';
+              });
+              matrix = rows;
+            }
+          } else if (Array.isArray(data) && Array.isArray(data[0])) {
+            matrix = data.map(row => row.map(cell => (cell && typeof cell === 'object' && cell.v !== undefined ? cell.v : cell)));
+          }
+
+          if (matrix.length > 0) {
+            let tableHtml = '<div class="table-responsive-wrapper"><table class="spreadsheet-table"><tbody>';
+            matrix.forEach((row, rIdx) => {
+              tableHtml += '<tr>';
+              (row || []).forEach(cell => {
+                const tag = rIdx === 0 ? 'th' : 'td';
+                tableHtml += `<${tag}>${escapeHtml(String(cell ?? ''))}</${tag}>`;
+              });
+              tableHtml += '</tr>';
+            });
+            tableHtml += '</tbody></table></div>';
+
+            const wrapper = document.createElement('div');
+            wrapper.className = 'fortunesheet-embedded-wrapper';
+            wrapper.innerHTML = `
+              <div class="fortunesheet-embedded-header">
+                <span class="fortunesheet-badge">EXCEL</span>
+                <span class="fortunesheet-embedded-title">Hoja de Cálculo Kortexa</span>
+              </div>
+              ${tableHtml}
+            `;
+            preEl.parentNode.replaceChild(wrapper, preEl);
+          }
+        } catch (e) {
+          // Si no es JSON legible, mantener el bloque de código
+        }
+      });
+    }
+
+    // 3. Procesador de Bloques de Código con botón de copiado rápido
+    function processCodeBlocksInContainer(container) {
+      container.querySelectorAll('pre').forEach(pre => {
+        if (pre.querySelector('.btn-copy-code') || pre.closest('.mermaid-wrapper') || pre.closest('.fortunesheet-embedded-wrapper')) return;
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'btn-copy-code';
+        copyBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copiar</span>`;
+        copyBtn.addEventListener('click', async () => {
+          const codeEl = pre.querySelector('code');
+          const textToCopy = codeEl ? codeEl.innerText : pre.innerText;
+          try {
+            await navigator.clipboard.writeText(textToCopy);
+            copyBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg><span style="color:#10b981;">¡Copiado!</span>`;
+            setTimeout(() => {
+              copyBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copiar</span>`;
+            }, 2000);
+          } catch (err) {
+            console.warn('Error al copiar código:', err);
+          }
+        });
+        pre.appendChild(copyBtn);
+      });
+    }
+
+    // 4. Remapeo de rutas relativas de imágenes y multimedia estándar ![alt](path)
+    function processMediaInContainer(container) {
+      container.querySelectorAll('img').forEach(img => {
+        let src = img.getAttribute('src') || '';
+        if (src && !src.startsWith('http://') && !src.startsWith('https://') && !src.startsWith('data:') && !src.startsWith('/s/')) {
+          const cleanSrc = src.replace(/^\.\//, '');
+          src = getAuthorizedMediaUrl(`/s/${token}/raw?file=${encodeURIComponent(cleanSrc)}`);
+          img.src = src;
+        }
+        const cleanUrlPath = src.split('?')[0].toLowerCase();
+        const isVideo = ['.mp4', '.webm', '.ogv', '.mov', '.mkv'].some(ext => cleanUrlPath.endsWith(ext));
+        const isAudio = ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac', '.weba', '.opus'].some(ext => cleanUrlPath.endsWith(ext));
+
+        if (isVideo) {
+          const video = document.createElement('video');
+          video.controls = true;
+          video.preload = 'metadata';
+          video.playsInline = true;
+          video.src = src;
+          video.style.maxWidth = '100%';
+          video.style.borderRadius = '8px';
+          video.style.margin = '16px 0';
+          img.parentNode.replaceChild(video, img);
+        } else if (isAudio) {
+          const audio = document.createElement('audio');
+          audio.controls = true;
+          audio.preload = 'metadata';
+          audio.src = src;
+          audio.style.width = '100%';
+          audio.style.margin = '12px 0';
+          img.parentNode.replaceChild(audio, img);
+        }
+      });
+    }
+
+    // 5. Envolver tablas para que sean desplazables responsivamente
+    function processTablesInContainer(container) {
+      container.querySelectorAll('table').forEach(table => {
+        if (table.closest('.table-responsive-wrapper')) return;
+        const wrapper = document.createElement('div');
+        wrapper.className = 'table-responsive-wrapper';
+        table.parentNode.insertBefore(wrapper, table);
+        wrapper.appendChild(table);
+      });
+    }
+
+    // 6. Navegación fluida por Wikilinks en colecciones / carpetas compartidas
+    function processWikilinksInContainer(container) {
+      container.querySelectorAll('.wikilink-badge').forEach(badge => {
+        badge.addEventListener('click', (e) => {
+          const target = badge.getAttribute('data-target');
+          if (!target) return;
+          if (Array.isArray(collectionFiles) && collectionFiles.length > 0) {
+            const cleanTarget = target.trim().toLowerCase();
+            const found = collectionFiles.find(f => 
+              (f.title && f.title.toLowerCase() === cleanTarget) ||
+              (f.filename && f.filename.toLowerCase() === cleanTarget) ||
+              (f.filename && f.filename.toLowerCase() === `${cleanTarget}.md`) ||
+              (f.name && f.name.toLowerCase() === cleanTarget)
+            );
+            if (found) {
+              e.preventDefault();
+              selectCollectionFile(found.filename);
+            }
+          }
+        });
+      });
+    }
+
+    async function renderMermaidDiagrams(container) {
+      if (!container || !window.mermaid) return;
+
+      // Fallback: detectar cualquier bloque mermaid generado por Marked como <pre><code class="language-mermaid">
+      const codeBlocks = container.querySelectorAll('pre code.language-mermaid, pre code.mermaid');
+      codeBlocks.forEach((codeEl, idx) => {
+        const rawCode = codeEl.textContent.trim();
+        const diagramId = `mermaid-fallback-${idx}-${Math.random().toString(36).substring(2, 7)}`;
+        const wrapper = document.createElement('div');
+        wrapper.className = 'mermaid-wrapper';
+        wrapper.setAttribute('data-diagram-id', diagramId);
+        wrapper.innerHTML = `
+          <div class="mermaid-toolbar">
+            <button type="button" class="mermaid-tool-btn btn-diagram-zoom-in" title="Acercar (+)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+            </button>
+            <button type="button" class="mermaid-tool-btn btn-diagram-zoom-out" title="Alejar (-)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+            </button>
+            <button type="button" class="mermaid-tool-btn btn-diagram-zoom-reset" title="Restablecer (100%)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            </button>
+            <button type="button" class="mermaid-tool-btn btn-diagram-fullscreen" title="Pantalla Completa (⛶)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+            </button>
+          </div>
+          <div class="mermaid-viewport">
+            <div class="mermaid" id="${diagramId}" data-code="${encodeURIComponent(rawCode)}">${escapeHtml(rawCode)}</div>
+          </div>
+        `;
+        const preEl = codeEl.closest('pre');
+        if (preEl && preEl.parentNode) {
+          preEl.parentNode.replaceChild(wrapper, preEl);
+        }
+      });
+
+      const elements = container.querySelectorAll('.mermaid');
+      if (elements.length === 0) return;
+
+      const isDark = (document.documentElement.getAttribute('data-theme') || 'dark') === 'dark';
+      try {
+        window.mermaid.initialize({
+          startOnLoad: false,
+          theme: isDark ? 'dark' : 'default',
+          securityLevel: 'loose',
+          fontFamily: 'Plus Jakarta Sans, sans-serif'
+        });
+      } catch (e) {}
+
+      for (let i = 0; i < elements.length; i++) {
+        const el = elements[i];
+        if (el.getAttribute('data-processed') === 'true') continue;
+        const rawCode = el.getAttribute('data-code') ? decodeURIComponent(el.getAttribute('data-code')) : el.textContent.trim();
+        const uniqueId = `mermaid-render-${Date.now()}-${i}`;
+        try {
+          const { svg } = await window.mermaid.render(uniqueId, rawCode);
+          el.innerHTML = svg;
+          el.setAttribute('data-processed', 'true');
+
+          const wrapper = el.closest('.mermaid-wrapper');
+          if (wrapper && !wrapper.dataset.controlsBound) {
+            wrapper.dataset.controlsBound = 'true';
+            setupDiagramControls(wrapper);
+          }
+        } catch (err) {
+          console.warn('Error renderizando diagrama Mermaid:', err);
+          el.innerHTML = `<div class="mermaid-error-box">⚠️ Error en la sintaxis del diagrama:\n${escapeHtml(err.message || String(err))}</div>`;
+          el.setAttribute('data-processed', 'true');
+        }
+      }
+    }
+
+    function setupDiagramControls(wrapper) {
+      let scale = 1.0;
+      const viewport = wrapper.querySelector('.mermaid-viewport');
+      const btnZoomIn = wrapper.querySelector('.btn-diagram-zoom-in');
+      const btnZoomOut = wrapper.querySelector('.btn-diagram-zoom-out');
+      const btnReset = wrapper.querySelector('.btn-diagram-zoom-reset');
+
+      if (btnZoomIn) {
+        btnZoomIn.addEventListener('click', () => {
+          scale = Math.min(3.0, scale + 0.2);
+          if (viewport) viewport.style.transform = `scale(${scale})`;
+        });
+      }
+      if (btnZoomOut) {
+        btnZoomOut.addEventListener('click', () => {
+          scale = Math.max(0.4, scale - 0.2);
+          if (viewport) viewport.style.transform = `scale(${scale})`;
+        });
+      }
+      if (btnReset) {
+        btnReset.addEventListener('click', () => {
+          scale = 1.0;
+          if (viewport) viewport.style.transform = '';
+        });
+      }
+      const btnFullscreen = wrapper.querySelector('.btn-diagram-fullscreen');
+      if (btnFullscreen) {
+        btnFullscreen.addEventListener('click', () => {
+          wrapper.classList.toggle('is-fullscreen');
+          document.body.style.overflow = wrapper.classList.contains('is-fullscreen') ? 'hidden' : '';
+        });
       }
     }
 

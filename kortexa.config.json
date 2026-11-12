@@ -1,15 +1,8 @@
 {
-  "vaultDir": "vaults/memo69/memong",
-  "vaultName": "memong",
+  "vaultDir": "vault",
+  "vaultName": "vault",
   "vaults": [
-    "vaults/memo69/memong",
-    "vaults/memo69/Proyectos"
+    "vault"
   ],
-  "vaultsMeta": {
-    "memong": {
-      "encrypted": true,
-      "salt": "fecc23690f074c81df916399c968b875",
-      "verificationHash": "9bcbcd82cea0f0eaace009faebdd8a39fa6e8bc6afa2072540f1230d66b22cac"
-    }
-  }
+  "vaultsMeta": {}
 }

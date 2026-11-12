@@ -381,6 +381,12 @@ export function renameUserVault(userId, oldName, newName) {
   if (existing) throw new Error(`Ya existe una bóveda llamada "${cleanNew}".`);
 
   const res = db.prepare('UPDATE user_vaults SET name = ? WHERE user_id = ? AND name = ?').run(cleanNew, userId, oldName);
+
+  // Actualizar referencias a la bóveda en la tabla de recursos compartidos (shares)
+  try {
+    db.prepare('UPDATE shares SET vault_name = ? WHERE owner_id = ? AND vault_name = ?').run(cleanNew, userId, oldName);
+  } catch {}
+
   return res.changes > 0;
 }
 
@@ -997,6 +1003,62 @@ export function getFriendships(userId) {
     incomingRequests,
     outgoingRequests
   };
+}
+
+/**
+ * Retorna los IDs de todos los amigos confirmados de un usuario
+ */
+export function getFriendIds(userId) {
+  const db = getAuthDb();
+  const uId = parseInt(userId, 10);
+  const rows = db.prepare(`
+    SELECT (CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END) as friend_id
+    FROM friendships
+    WHERE (sender_id = ? OR receiver_id = ?) AND status = 'accepted'
+  `).all(uId, uId, uId);
+  return rows.map(r => r.friend_id);
+}
+
+/**
+ * Retorna los IDs de todos los usuarios con derecho a ver la presencia de un usuario
+ * (Amigos mutuos + colaboradores con quienes comparte recursos o bóvedas)
+ */
+export function getPresenceSubscriberIds(userId) {
+  const uId = parseInt(userId, 10);
+  const friendIds = getFriendIds(uId);
+  const db = getAuthDb();
+  const shareRows = db.prepare(`
+    SELECT DISTINCT shared_with_user_id as uid FROM shares WHERE owner_id = ? AND shared_with_user_id IS NOT NULL
+    UNION
+    SELECT DISTINCT owner_id as uid FROM shares WHERE shared_with_user_id = ?
+  `).all(uId, uId);
+  const shareUserIds = shareRows.map(r => r.uid);
+  return Array.from(new Set([...friendIds, ...shareUserIds]));
+}
+
+/**
+ * Retorna los IDs de los colaboradores que tienen acceso a un recurso o bóveda específica
+ */
+export function getCollaboratorsForResource(owner_id, vault_name, resource_path = null) {
+  const db = getAuthDb();
+  const oId = parseInt(owner_id, 10);
+  const cleanPath = (resource_path || '').replace(/\\/g, '/').trim();
+  
+  let rows;
+  if (cleanPath) {
+    rows = db.prepare(`
+      SELECT DISTINCT shared_with_user_id as uid
+      FROM shares
+      WHERE owner_id = ? AND vault_name = ? AND (resource_path = ? OR resource_type = 'vault') AND shared_with_user_id IS NOT NULL
+    `).all(oId, vault_name, cleanPath);
+  } else {
+    rows = db.prepare(`
+      SELECT DISTINCT shared_with_user_id as uid
+      FROM shares
+      WHERE owner_id = ? AND vault_name = ? AND shared_with_user_id IS NOT NULL
+    `).all(oId, vault_name);
+  }
+  return rows.map(r => r.uid).filter(Boolean);
 }
 
 // ==========================================

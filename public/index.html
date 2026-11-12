@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261110v3">
+  <link rel="stylesheet" href="styles.css?v=20261111modalstack">
   <script>
     (function() {
       const saved = localStorage.getItem('kortexa-theme') || 'auto';
@@ -343,19 +343,19 @@
           </button>
 
           <div class="title-input-wrapper">
-            <span class="node-prefix-badge" title="Documento Markdown (.md)">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
-                <line x1="16" y1="13" x2="8" y2="13"/>
-                <line x1="16" y1="17" x2="8" y2="17"/>
-              </svg>
-            </span>
-            <div id="note-folder-badge" class="note-folder-badge" title="Carpeta actual (clic para mover o cambiar)">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-              <span id="note-folder-name">Raíz</span>
+            <div class="title-input-row">
+              <span class="node-prefix-badge" id="node-prefix-badge" title="Documento Markdown (.md)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <line x1="16" y1="13" x2="8" y2="13"/>
+                  <line x1="16" y1="17" x2="8" y2="17"/>
+                </svg>
+              </span>
+              <input type="text" id="note-title-input" placeholder="Título del pensamiento..." spellcheck="false">
             </div>
-            <input type="text" id="note-title-input" placeholder="Título del pensamiento..." spellcheck="false">
+            <div class="editor-breadcrumb" id="editor-breadcrumb" aria-label="Ruta de ubicación"></div>
+            <span id="note-folder-name" style="display:none;"></span>
           </div>
           
           <div class="header-actions">
@@ -814,6 +814,39 @@
           </div>
           <h2>Cartografía Sináptica</h2>
           <p>Visualiza el flujo de tus pensamientos. Haz clic en un nodo para navegarlo.</p>
+          <div class="graph-stats-row">
+            <span id="graph-stat-nodes" class="graph-stat-chip">0 pensamientos</span>
+            <span id="graph-stat-links" class="graph-stat-chip">0 conexiones</span>
+          </div>
+        </div>
+
+        <!-- BARRA FLOTANTE DE CONTROLES DEL GRAFO -->
+        <div class="graph-controls-toolbar" id="graph-controls-toolbar">
+          <div class="graph-search-container">
+            <svg class="graph-search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+            </svg>
+            <input type="text" id="graph-search-input" placeholder="Buscar nodo..." spellcheck="false" autocomplete="off">
+            <button type="button" id="btn-graph-search-clear" class="graph-search-clear" style="display:none;" title="Limpiar búsqueda">&times;</button>
+          </div>
+
+          <div class="graph-btn-group">
+            <button type="button" id="btn-graph-zoom-in" class="graph-ctrl-btn" title="Acercar (Zoom In)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+            </button>
+            <button type="button" id="btn-graph-zoom-out" class="graph-ctrl-btn" title="Alejar (Zoom Out)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+            </button>
+            <button type="button" id="btn-graph-fit" class="graph-ctrl-btn" title="Centrar y encuadrar toda la red">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><polyline points="21 15 21 21 15 21"/><polyline points="3 9 3 3 9 3"/></svg>
+            </button>
+            <button type="button" id="btn-graph-toggle-orphans" class="graph-ctrl-btn active" title="Alternar notas aisladas (sin conexiones)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><line x1="12" y1="9" x2="17" y2="6"/><line x1="12" y1="15" x2="7" y2="18"/></svg>
+            </button>
+            <button type="button" id="btn-graph-toggle-labels" class="graph-ctrl-btn active" title="Alternar nombres visibles de notas">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 7V4h16v3"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+            </button>
+          </div>
         </div>
         <div id="graph-container"></div>
       </section>
@@ -992,33 +1025,6 @@
         <!-- Renderizado dinámico agrupado por usuario -->
       </div>
     </aside>
-  </div>
-
-  <!-- COMPONENTE MODAL DE ALERTAS Y CONFIRMACIÓN KORTEXA -->
-  <div id="modal-container" class="modal-backdrop" aria-hidden="true">
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-      <div class="modal-body">
-        <div id="modal-icon-wrapper" class="modal-icon-badge danger">
-          <svg id="modal-icon-svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="3 6 5 6 21 6"/>
-            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-            <line x1="10" y1="11" x2="10" y2="17"/>
-            <line x1="14" y1="11" x2="14" y2="17"/>
-          </svg>
-        </div>
-        <div class="modal-content-group">
-          <h3 id="modal-title">Confirmar Acción</h3>
-          <p id="modal-message">¿Estás seguro de que deseas proceder?</p>
-          <div id="modal-input-container" class="modal-input-container" style="display: none;">
-            <input type="text" id="modal-input-field" class="modal-input-field" placeholder="Nombre de la carpeta...">
-          </div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button id="modal-btn-cancel" class="modal-btn secondary">Cancelar</button>
-        <button id="modal-btn-confirm" class="modal-btn danger">Eliminar</button>
-      </div>
-    </div>
   </div>
 
   <!-- MODAL PARA COMPARTIR DOCUMENTOS / NOTAS (KORTEXA SHARE) -->
@@ -2063,6 +2069,33 @@
     </div>
   </div>
 
+  <!-- COMPONENTE MODAL DE ALERTAS, PROMPTS Y CONFIRMACIÓN KORTEXA (Capas Superiores) -->
+  <div id="modal-container" class="modal-backdrop" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-body">
+        <div id="modal-icon-wrapper" class="modal-icon-badge danger">
+          <svg id="modal-icon-svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            <line x1="10" y1="11" x2="10" y2="17"/>
+            <line x1="14" y1="11" x2="14" y2="17"/>
+          </svg>
+        </div>
+        <div class="modal-content-group">
+          <h3 id="modal-title">Confirmar Acción</h3>
+          <p id="modal-message">¿Estás seguro de que deseas proceder?</p>
+          <div id="modal-input-container" class="modal-input-container" style="display: none;">
+            <input type="text" id="modal-input-field" class="modal-input-field" placeholder="Nombre de la carpeta...">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="modal-btn-cancel" class="modal-btn secondary">Cancelar</button>
+        <button id="modal-btn-confirm" class="modal-btn danger">Eliminar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- MODAL / PANTALLA DE AUTENTICACIÓN (LOGIN Y REGISTRO) -->
   <div id="auth-modal" class="auth-modal-screen" aria-hidden="true" style="display: none;">
     <div class="auth-modal-backdrop"></div>
@@ -2216,6 +2249,6 @@
     <!-- CONTENEDOR DE NOTIFICACIONES TOAST -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <script src="app.js?v=20261110v3"></script>
+  <script src="app.js?v=20261111modalstack"></script>
 </body>
 </html>

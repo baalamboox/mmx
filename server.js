@@ -47,14 +47,61 @@ import {
   sendDirectMessage,
   getDirectMessages,
   markMessagesAsRead,
-  getUnreadMessagesSummary
+  getUnreadMessagesSummary,
+  getCollaboratorsForResource,
+  getAuthDb
 } from './auth-db.js';
-import { initWebSocketServer, sendToUser, broadcast, isUserOnline, getOnlineUsersCount, getOnlineUserIds } from './ws-server.js';
+import { initWebSocketServer, sendToUser, sendToUsers, broadcast, isUserOnline, getOnlineUsersCount, getOnlineUserIds } from './ws-server.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const CONFIG_FILE = path.join(__dirname, 'kortexa.config.json');
+
+/**
+ * Notifica a todos los colaboradores relevantes de una bóveda compartida o recurso cuando se produce una mutación
+ */
+function notifySharedVaultMutation(req, eventType, details = {}) {
+  try {
+    let interestedUserIds = [];
+    if (req.isSharedVault) {
+      const ownerId = req.userVault?.owner?.id;
+      if (ownerId && ownerId !== req.user.id) {
+        interestedUserIds.push(ownerId);
+      }
+      const vaultName = req.userVault?.name || req.userVault?.vault_name;
+      if (ownerId && vaultName) {
+        const collaborators = getCollaboratorsForResource(ownerId, vaultName);
+        for (const cid of collaborators) {
+          if (cid !== req.user.id && !interestedUserIds.includes(cid)) {
+            interestedUserIds.push(cid);
+          }
+        }
+      }
+    } else if (req.userVault) {
+      const collaborators = getCollaboratorsForResource(req.user.id, req.userVault.name, details.path || null);
+      for (const cid of collaborators) {
+        if (cid !== req.user.id && !interestedUserIds.includes(cid)) {
+          interestedUserIds.push(cid);
+        }
+      }
+    }
+
+    if (interestedUserIds.length > 0) {
+      sendToUsers(interestedUserIds, eventType, {
+        vault: req.userVault?.name || req.userVault?.vault_name,
+        user: {
+          id: req.user.id,
+          username: req.user.username,
+          nombre_completo: `${req.user.nombres || ''} ${req.user.apellido_paterno || ''}`.trim() || req.user.username
+        },
+        ...details
+      });
+    }
+  } catch (err) {
+    console.error('Error notificando mutación de recurso compartido:', err);
+  }
+}
 
 // ==========================================
 // CRIPTOGRAFÍA DE ALTA SEGURIDAD (AES-256-GCM + PBKDF2)
@@ -503,6 +550,85 @@ function getFileType(ext) {
     if (exts.includes(lowerExt)) return type;
   }
   return 'other';
+}
+
+const MIME_TYPES_MAP = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.pdf': 'application/pdf',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.ogv': 'video/ogg',
+  '.mov': 'video/quicktime',
+  '.mkv': 'video/x-matroska',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.weba': 'audio/webm',
+  '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac',
+  '.flac': 'audio/flac',
+  '.opus': 'audio/opus',
+  '.md': 'text/markdown; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
+  '.json': 'application/json; charset=utf-8'
+};
+
+// Transmisión con soporte para peticiones HTTP de rango parcial (RFC 7233)
+// Vital para reproducción de video y audio en navegadores modernos (Safari, iOS, Chrome, Edge)
+function sendBufferWithRange(req, res, buffer, contentType, filename) {
+  const total = buffer.length;
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Content-Type', contentType);
+  if (filename) {
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(filename)}"`);
+  }
+
+  const range = req.headers.range;
+  if (!range) {
+    res.setHeader('Content-Length', total);
+    return res.status(200).send(buffer);
+  }
+
+  const match = range.match(/^bytes=(\d*)-(\d*)$/);
+  if (!match) {
+    res.setHeader('Content-Range', `bytes */${total}`);
+    return res.status(416).send('Requested range not satisfiable');
+  }
+
+  let start = match[1] !== '' ? parseInt(match[1], 10) : undefined;
+  let end = match[2] !== '' ? parseInt(match[2], 10) : undefined;
+
+  if (start === undefined && end === undefined) {
+    res.setHeader('Content-Range', `bytes */${total}`);
+    return res.status(416).send('Requested range not satisfiable');
+  }
+
+  if (start === undefined) {
+    start = Math.max(0, total - end);
+    end = total - 1;
+  } else if (end === undefined || end >= total) {
+    end = total - 1;
+  }
+
+  if (start > end || start >= total) {
+    res.setHeader('Content-Range', `bytes */${total}`);
+    return res.status(416).send('Requested range not satisfiable');
+  }
+
+  const chunkSize = end - start + 1;
+  const chunk = buffer.subarray(start, end + 1);
+
+  res.status(206);
+  res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`);
+  res.setHeader('Content-Length', chunkSize);
+  res.send(chunk);
 }
 
 // ==========================================
@@ -1202,15 +1328,41 @@ app.post('/api/vault/switch', requireAuth, async (req, res) => {
 // Renombrar una bóveda del usuario
 app.post('/api/vault/rename', requireAuth, async (req, res) => {
   try {
-    const { oldName, newName } = req.body;
+    if (req.user && req.user.active_shared_vault_id) {
+      return res.status(403).json({ error: 'No puedes renombrar una bóveda compartida por otro usuario' });
+    }
+
+    let { oldName, newName } = req.body;
+    if (!oldName) {
+      const activeVault = getUserActiveVault(req.user.id);
+      oldName = activeVault?.name;
+    }
+
     if (!oldName || !newName) {
       return res.status(400).json({ error: 'Se requiere nombre actual y nuevo nombre' });
     }
+
     const cleanOld = oldName.replace(/[<>:"/\\|?*]/g, '').trim();
     const cleanNew = newName.replace(/[<>:"/\\|?*]/g, '').trim();
 
+    if (!cleanNew) {
+      return res.status(400).json({ error: 'El nuevo nombre contiene caracteres no permitidos' });
+    }
+
+    if (cleanOld.toLowerCase() === cleanNew.toLowerCase()) {
+      return res.status(400).json({ error: 'El nuevo nombre debe ser diferente al actual' });
+    }
+
     const oldDir = getUserVaultDir(req.user, cleanOld);
     const newDir = getUserVaultDir(req.user, cleanNew);
+
+    if (!fsSync.existsSync(oldDir)) {
+      await fs.mkdir(oldDir, { recursive: true });
+    }
+
+    if (fsSync.existsSync(newDir)) {
+      return res.status(400).json({ error: `Ya existe una carpeta con el nombre "${cleanNew}" en disco.` });
+    }
 
     await fs.rename(oldDir, newDir);
     renameUserVault(req.user.id, cleanOld, cleanNew);
@@ -1221,8 +1373,22 @@ app.post('/api/vault/rename', requireAuth, async (req, res) => {
       clearActiveVaultKey(req.user.id, cleanOld);
     }
 
+    // Actualizar config si la bóveda activa local del servidor coincidía
+    try {
+      const cfg = loadConfig();
+      const userFolder = getUserFolderName(req.user);
+      const expectedOldRel = path.join('vaults', userFolder, cleanOld).replace(/\\/g, '/');
+      const expectedNewRel = path.join('vaults', userFolder, cleanNew).replace(/\\/g, '/');
+      if (cfg.vaultDir && (cfg.vaultDir === expectedOldRel || cfg.vaultDir === cleanOld)) {
+        cfg.vaultDir = expectedNewRel;
+        cfg.vaultName = cleanNew;
+        saveConfig(cfg);
+      }
+    } catch {}
+
     res.json({ success: true, name: cleanNew, path: newDir });
   } catch (err) {
+    console.error('Error al renombrar bóveda:', err);
     res.status(500).json({ error: 'Error al renombrar bóveda', details: err.message });
   }
 });
@@ -1265,6 +1431,10 @@ app.post('/api/folders', requireAuth, checkVaultLock, async (req, res) => {
     const fullPath = resolveReqVaultPath(req, cleanFolder);
 
     await fs.mkdir(fullPath, { recursive: true });
+    notifySharedVaultMutation(req, 'SHARED_FOLDER_MUTATED', {
+      action: 'create',
+      folder: cleanFolder.replace(/\\/g, '/')
+    });
     res.json({ success: true, folder: cleanFolder.replace(/\\/g, '/') });
   } catch (err) {
     res.status(500).json({ error: 'Error al crear carpeta', details: err.message });
@@ -1285,9 +1455,329 @@ app.delete('/api/folders', requireAuth, checkVaultLock, async (req, res) => {
 
     const fullPath = resolveReqVaultPath(req, folder);
     await fs.rm(fullPath, { recursive: true, force: true });
+    notifySharedVaultMutation(req, 'SHARED_FOLDER_MUTATED', {
+      action: 'delete',
+      folder: (folder || '').replace(/\\/g, '/')
+    });
     res.json({ success: true, message: `Carpeta ${folder} eliminada.` });
   } catch (err) {
     res.status(500).json({ error: 'Error al eliminar carpeta', details: err.message });
+  }
+});
+
+// 4.0. Renombrar una carpeta o subcarpeta en la bóveda del usuario
+app.post('/api/folders/rename', requireAuth, checkVaultLock, async (req, res) => {
+  try {
+    if (req.isSharedVault && req.vaultPermission !== 'write') {
+      return res.status(403).json({ error: 'Permiso denegado: esta bóveda compartida es de solo lectura.' });
+    }
+
+    let { oldPath, newName } = req.body;
+    if (!oldPath || !newName) {
+      return res.status(400).json({ error: 'La ruta actual y el nuevo nombre son requeridos.' });
+    }
+
+    const cleanOld = oldPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').trim();
+    if (!cleanOld) {
+      return res.status(400).json({ error: 'Ruta de carpeta no válida.' });
+    }
+
+    const sourceFullPath = resolveReqVaultPath(req, cleanOld);
+
+    let sourceStat;
+    try {
+      sourceStat = await fs.stat(sourceFullPath);
+    } catch {
+      return res.status(404).json({ error: `La carpeta "${cleanOld}" no existe en la bóveda.` });
+    }
+
+    if (!sourceStat.isDirectory()) {
+      return res.status(400).json({ error: 'La ruta especificada no es una carpeta.' });
+    }
+
+    // Limpiar nuevo nombre: no debe contener separadores de ruta ni caracteres prohibidos
+    let sanitizedNewName = newName.replace(/[/\\?%*:|"<>]/g, '').trim();
+    if (!sanitizedNewName) {
+      return res.status(400).json({ error: 'El nuevo nombre contiene caracteres no válidos.' });
+    }
+
+    // Calcular la nueva ruta relativa preservando el directorio padre
+    const parentDir = path.dirname(cleanOld).replace(/\\/g, '/');
+    const newRelativePath = (parentDir === '.' || !parentDir)
+      ? sanitizedNewName
+      : `${parentDir}/${sanitizedNewName}`;
+
+    if (newRelativePath === cleanOld) {
+      return res.json({
+        success: true,
+        oldPath: cleanOld,
+        newPath: newRelativePath,
+        name: sanitizedNewName
+      });
+    }
+
+    const destFullPath = resolveReqVaultPath(req, newRelativePath);
+
+    if (fsSync.existsSync(destFullPath)) {
+      return res.status(409).json({ error: `Ya existe una carpeta o archivo llamado "${sanitizedNewName}" en esta ubicación.` });
+    }
+
+    // Renombrar físicamente la carpeta en disco
+    await fs.rename(sourceFullPath, destFullPath);
+
+    // Actualizar en cascada los registros en la tabla shares (si la carpeta o sus subrecursos estaban compartidos)
+    try {
+      const db = getAuthDb();
+      const vaultOwnerId = req.userVault?.owner?.id || req.user.id;
+      const vaultName = req.userVault.name;
+
+      // 1. La carpeta en sí
+      db.prepare('UPDATE shares SET resource_path = ? WHERE owner_id = ? AND vault_name = ? AND resource_path = ?')
+        .run(newRelativePath, vaultOwnerId, vaultName, cleanOld);
+
+      // 2. Todos los subrecursos compartidos (subcarpetas o notas)
+      const oldPrefix = cleanOld + '/';
+      const newPrefix = newRelativePath + '/';
+      const matchingShares = db.prepare('SELECT id, resource_path FROM shares WHERE owner_id = ? AND vault_name = ? AND resource_path LIKE ?')
+        .all(vaultOwnerId, vaultName, oldPrefix + '%');
+
+      for (const s of matchingShares) {
+        const updatedSubPath = newPrefix + s.resource_path.substring(oldPrefix.length);
+        db.prepare('UPDATE shares SET resource_path = ? WHERE id = ?').run(updatedSubPath, s.id);
+      }
+    } catch (shareErr) {
+      console.warn('Aviso al actualizar shares tras renombrar carpeta:', shareErr);
+    }
+
+    notifySharedVaultMutation(req, 'SHARED_FOLDER_MUTATED', {
+      action: 'rename',
+      oldPath: cleanOld,
+      newPath: newRelativePath
+    });
+
+    res.json({
+      success: true,
+      oldPath: cleanOld,
+      newPath: newRelativePath,
+      name: sanitizedNewName
+    });
+  } catch (err) {
+    console.error('Error al renombrar carpeta en bóveda:', err);
+    res.status(500).json({ error: 'Error al renombrar carpeta', details: err.message });
+  }
+});
+
+// 4.1. Mover un archivo o carpeta dentro de la bóveda del usuario (Drag & Drop)
+app.post('/api/fs/move', requireAuth, checkVaultLock, async (req, res) => {
+  try {
+    if (req.isSharedVault && req.vaultPermission !== 'write') {
+      return res.status(403).json({ error: 'Permiso denegado: esta bóveda compartida es de solo lectura.' });
+    }
+
+    let { sourcePath, targetFolder } = req.body;
+    if (!sourcePath) {
+      return res.status(400).json({ error: 'La ruta de origen es requerida' });
+    }
+
+    // Normalizar rutas relativas dentro de la bóveda
+    const cleanSource = sourcePath.replace(/\\/g, '/').replace(/^\/+/, '').trim();
+    const cleanTargetFolder = (targetFolder || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').trim();
+
+    if (!cleanSource) {
+      return res.status(400).json({ error: 'Ruta de origen no válida' });
+    }
+
+    const sourceFullPath = resolveReqVaultPath(req, cleanSource);
+    const targetFolderFullPath = resolveReqVaultPath(req, cleanTargetFolder);
+
+    // Verificar existencia del origen
+    let sourceStat;
+    try {
+      sourceStat = await fs.stat(sourceFullPath);
+    } catch {
+      return res.status(404).json({ error: `El archivo o carpeta "${cleanSource}" no existe en la bóveda.` });
+    }
+
+    const isDirectory = sourceStat.isDirectory();
+    const itemName = path.basename(cleanSource);
+
+    // Evitar mover una carpeta dentro de sí misma o de sus subcarpetas
+    if (isDirectory) {
+      if (cleanTargetFolder === cleanSource || cleanTargetFolder.startsWith(cleanSource + '/')) {
+        return res.status(400).json({ error: 'No puedes mover una carpeta dentro de sí misma o de sus subcarpetas.' });
+      }
+    }
+
+    // Verificar que la carpeta destino existe (o crearla si no existe)
+    if (cleanTargetFolder) {
+      try {
+        const targetStat = await fs.stat(targetFolderFullPath);
+        if (!targetStat.isDirectory()) {
+          return res.status(400).json({ error: 'La ruta de destino no es una carpeta válida.' });
+        }
+      } catch {
+        await fs.mkdir(targetFolderFullPath, { recursive: true });
+      }
+    }
+
+    const newRelativePath = cleanTargetFolder ? `${cleanTargetFolder}/${itemName}` : itemName;
+
+    // Si la ruta destino es idéntica a la origen, no hay nada que hacer
+    if (newRelativePath === cleanSource) {
+      return res.json({ success: true, oldPath: cleanSource, newPath: newRelativePath, name: itemName, isFolder: isDirectory });
+    }
+
+    const destFullPath = path.join(targetFolderFullPath, itemName);
+
+    // Verificar si ya existe en destino
+    if (fsSync.existsSync(destFullPath)) {
+      return res.status(409).json({ error: `Ya existe un elemento llamado "${itemName}" en la carpeta de destino.` });
+    }
+
+    // Mover archivo o carpeta atómicamente en disco
+    await fs.rename(sourceFullPath, destFullPath);
+
+    // Actualizar referencias en la tabla shares si aplica
+    try {
+      const db = getAuthDb();
+      const vaultOwnerId = req.userVault?.owner?.id || req.user.id;
+      const vaultName = req.userVault.name;
+
+      if (isDirectory) {
+        db.prepare('UPDATE shares SET resource_path = ? WHERE owner_id = ? AND vault_name = ? AND resource_path = ?')
+          .run(newRelativePath, vaultOwnerId, vaultName, cleanSource);
+
+        const oldPrefix = cleanSource + '/';
+        const newPrefix = newRelativePath + '/';
+        const matchingShares = db.prepare('SELECT id, resource_path FROM shares WHERE owner_id = ? AND vault_name = ? AND resource_path LIKE ?')
+          .all(vaultOwnerId, vaultName, oldPrefix + '%');
+
+        for (const s of matchingShares) {
+          const updatedSubPath = newPrefix + s.resource_path.substring(oldPrefix.length);
+          db.prepare('UPDATE shares SET resource_path = ? WHERE id = ?').run(updatedSubPath, s.id);
+        }
+      } else {
+        db.prepare('UPDATE shares SET resource_path = ? WHERE owner_id = ? AND vault_name = ? AND resource_path = ?')
+          .run(newRelativePath, vaultOwnerId, vaultName, cleanSource);
+      }
+    } catch (shareErr) {
+      console.warn('Aviso al actualizar shares tras mover recurso:', shareErr);
+    }
+
+    notifySharedVaultMutation(req, 'SHARED_FOLDER_MUTATED', {
+      action: 'move',
+      oldPath: cleanSource,
+      newPath: newRelativePath,
+      targetFolder: cleanTargetFolder
+    });
+
+    res.json({
+      success: true,
+      oldPath: cleanSource,
+      newPath: newRelativePath,
+      targetFolder: cleanTargetFolder,
+      name: itemName,
+      isFolder: isDirectory
+    });
+  } catch (err) {
+    console.error('Error al mover recurso en bóveda:', err);
+    res.status(500).json({ error: 'Error al mover recurso en la bóveda', details: err.message });
+  }
+});
+
+// Renombrar cualquier archivo en la bóveda (multimedia, notas, etc.)
+app.post('/api/fs/rename', requireAuth, checkVaultLock, async (req, res) => {
+  try {
+    if (req.isSharedVault && req.vaultPermission !== 'write') {
+      return res.status(403).json({ error: 'Permiso denegado: esta bóveda compartida es de solo lectura.' });
+    }
+
+    let { oldPath, newName } = req.body;
+    if (!oldPath || !newName) {
+      return res.status(400).json({ error: 'La ruta actual y el nuevo nombre son requeridos.' });
+    }
+
+    const cleanOld = oldPath.replace(/\\/g, '/').replace(/^\/+/, '').trim();
+    if (!cleanOld) {
+      return res.status(400).json({ error: 'Ruta de archivo no válida.' });
+    }
+
+    const sourceFullPath = resolveReqVaultPath(req, cleanOld);
+
+    let sourceStat;
+    try {
+      sourceStat = await fs.stat(sourceFullPath);
+    } catch {
+      return res.status(404).json({ error: `El archivo "${cleanOld}" no existe en la bóveda.` });
+    }
+
+    if (sourceStat.isDirectory()) {
+      return res.status(400).json({ error: 'Para renombrar carpetas utiliza la opción de gestión de carpetas.' });
+    }
+
+    // Limpiar nuevo nombre (evitar caracteres prohibidos en sistemas de archivos)
+    let sanitizedNewName = newName.replace(/[/\\?%*:|"<>]/g, '').trim();
+    if (!sanitizedNewName) {
+      return res.status(400).json({ error: 'El nuevo nombre contiene caracteres no válidos.' });
+    }
+
+    // Preservar la extensión original si el usuario no la incluyó
+    const oldExt = path.extname(cleanOld);
+    const newExt = path.extname(sanitizedNewName);
+    if (!newExt && oldExt) {
+      sanitizedNewName += oldExt;
+    }
+
+    // Obtener la carpeta contenedora
+    const parentFolder = path.dirname(cleanOld).replace(/\\/g, '/');
+    const newRelativePath = (parentFolder === '.' || !parentFolder) 
+      ? sanitizedNewName 
+      : `${parentFolder}/${sanitizedNewName}`;
+
+    if (newRelativePath === cleanOld) {
+      return res.json({
+        success: true,
+        oldPath: cleanOld,
+        newPath: newRelativePath,
+        name: sanitizedNewName
+      });
+    }
+
+    const destFullPath = resolveReqVaultPath(req, newRelativePath);
+
+    if (fsSync.existsSync(destFullPath)) {
+      return res.status(409).json({ error: `Ya existe un archivo llamado "${sanitizedNewName}" en esta ubicación.` });
+    }
+
+    // Renombrar atómicamente en disco
+    await fs.rename(sourceFullPath, destFullPath);
+
+    // Actualizar referencias en la base de datos de shares si este archivo estaba compartido
+    try {
+      const db = getAuthDb();
+      const vaultOwnerId = req.userVault?.owner?.id || req.user.id;
+      const vaultName = req.userVault.name;
+      db.prepare('UPDATE shares SET resource_path = ? WHERE owner_id = ? AND vault_name = ? AND resource_path = ?')
+        .run(newRelativePath, vaultOwnerId, vaultName, cleanOld);
+    } catch (shareErr) {
+      console.warn('Aviso al actualizar shares tras renombrar archivo:', shareErr);
+    }
+
+    notifySharedVaultMutation(req, 'SHARED_FOLDER_MUTATED', {
+      action: 'rename',
+      oldPath: cleanOld,
+      newPath: newRelativePath
+    });
+
+    res.json({
+      success: true,
+      oldPath: cleanOld,
+      newPath: newRelativePath,
+      name: sanitizedNewName
+    });
+  } catch (err) {
+    console.error('Error al renombrar archivo en bóveda:', err);
+    res.status(500).json({ error: 'Error al renombrar archivo', details: err.message });
   }
 });
 
@@ -1299,9 +1789,9 @@ app.get('/api/vault-raw/:path(*)', requireAuth, checkVaultLock, async (req, res)
     await fs.access(fullPath);
     const buf = await readVaultFileBuffer(fullPath, req.userVaultKey);
     const ext = path.extname(fullPath).toLowerCase();
+    const contentType = MIME_TYPES_MAP[ext] || 'application/octet-stream';
     res.setHeader('Cache-Control', 'private, max-age=86400');
-    res.type(ext);
-    res.send(buf);
+    sendBufferWithRange(req, res, buf, contentType, path.basename(fullPath));
   } catch (err) {
     if (err.code === 'ENOENT') {
       return res.status(404).send('Archivo no encontrado en la bóveda');
@@ -1522,6 +2012,12 @@ app.post('/api/notes', requireAuth, checkVaultLock, async (req, res) => {
 
     const folderRelative = path.dirname(relativePath).replace(/\\/g, '/');
 
+    notifySharedVaultMutation(req, 'NOTE_UPDATED', {
+      title: safeTitle,
+      path: relativePath.replace(/\\/g, '/'),
+      folder: folderRelative === '.' ? '' : folderRelative
+    });
+
     res.json({
       success: true,
       filename: relativePath.replace(/\\/g, '/'),
@@ -1549,6 +2045,9 @@ app.delete(['/api/notes', '/api/notes/:path(*)'], requireAuth, checkVaultLock, a
 
     const fullPath = resolveReqVaultPath(req, notePath);
     await fs.unlink(fullPath);
+    notifySharedVaultMutation(req, 'NOTE_DELETED', {
+      path: notePath.replace(/\\/g, '/')
+    });
     res.json({ success: true, message: `Archivo ${notePath} eliminado.` });
   } catch (err) {
     res.status(500).json({ error: 'Error al eliminar el archivo', details: err.message });
@@ -1560,26 +2059,59 @@ app.get('/api/graph', requireAuth, checkVaultLock, async (req, res) => {
   try {
     const allFiles = await getAllVaultFiles(req.userVaultDir);
     const mdFiles = allFiles.filter(f => f.type === 'note');
-    const nodesMap = new Map();
-    const links = [];
+
+    // Mapeo canónico único: clave = filename único
+    const canonicalNodes = new Map();
+    // Diccionario de resolución de alias (para resolver enlaces como [[Nota]], [[Nota.md]] o [[Carpeta/Nota]])
+    const aliasToCanonicalId = new Map();
 
     for (const file of allFiles) {
-      nodesMap.set(file.title, {
-        id: file.title,
+      const canonicalId = file.filename;
+      const nodeObj = {
+        id: canonicalId,
         name: file.name,
+        title: file.title,
         filename: file.filename,
         folder: file.folder,
         type: file.type,
-        exists: true
-      });
-      if (file.name !== file.title) {
-        nodesMap.set(file.name, nodesMap.get(file.title));
+        exists: true,
+        val: 1
+      };
+      canonicalNodes.set(canonicalId, nodeObj);
+
+      // Registrar alias para resolución
+      aliasToCanonicalId.set(canonicalId.toLowerCase(), canonicalId);
+      aliasToCanonicalId.set(file.name.toLowerCase(), canonicalId);
+      if (!aliasToCanonicalId.has(file.title.toLowerCase())) {
+        aliasToCanonicalId.set(file.title.toLowerCase(), canonicalId);
+      }
+      const pathWithoutExt = file.filename.replace(/\.[^/.]+$/, '').toLowerCase();
+      if (!aliasToCanonicalId.has(pathWithoutExt)) {
+        aliasToCanonicalId.set(pathWithoutExt, canonicalId);
       }
     }
 
-    for (const file of mdFiles) {
-      const sourceTitle = file.title;
-      const content = await readVaultFileText(file.fullPath, req.userVaultKey);
+    const links = [];
+    const missingNodes = new Map();
+
+    // Lectura concurrente en paralelo de todos los archivos markdown
+    const mdContents = await Promise.all(
+      mdFiles.map(async (file) => {
+        try {
+          const content = await readVaultFileText(file.fullPath, req.userVaultKey);
+          return { file, content };
+        } catch (_) {
+          return { file, content: '' };
+        }
+      })
+    );
+
+    // Evitar enlaces duplicados entre el mismo par de nodos
+    const linkSet = new Set();
+
+    for (const { file, content } of mdContents) {
+      if (!content) continue;
+      const sourceId = file.filename;
       const matches = [...content.matchAll(WIKI_LINK_REGEX)];
 
       for (const match of matches) {
@@ -1588,27 +2120,59 @@ app.get('/api/graph', requireAuth, checkVaultLock, async (req, res) => {
         if (rawTarget.includes('|')) {
           rawTarget = rawTarget.split('|')[0].trim();
         }
-        const targetTitle = rawTarget;
-        if (!targetTitle) continue;
+        if (!rawTarget) continue;
 
-        if (!nodesMap.has(targetTitle)) {
-          nodesMap.set(targetTitle, {
-            id: targetTitle,
-            name: targetTitle,
-            type: 'note',
-            exists: false
-          });
+        const targetKey = rawTarget.toLowerCase();
+        let targetId = aliasToCanonicalId.get(targetKey);
+
+        if (!targetId) {
+          const cleanTargetTitle = rawTarget.split('/').pop().replace(/\.md$/, '');
+          const virtualId = `missing:${rawTarget}`;
+          targetId = virtualId;
+
+          if (!missingNodes.has(virtualId)) {
+            missingNodes.set(virtualId, {
+              id: virtualId,
+              name: rawTarget,
+              title: cleanTargetTitle,
+              filename: rawTarget.endsWith('.md') ? rawTarget : `${rawTarget}.md`,
+              folder: rawTarget.includes('/') ? rawTarget.substring(0, rawTarget.lastIndexOf('/')) : '',
+              type: 'note',
+              exists: false,
+              val: 1
+            });
+            aliasToCanonicalId.set(targetKey, virtualId);
+          }
         }
 
-        links.push({
-          source: sourceTitle,
-          target: targetTitle
-        });
+        // Evitar auto-enlaces circulares
+        if (sourceId === targetId) continue;
+
+        const linkKey = `${sourceId}=>${targetId}`;
+        if (!linkSet.has(linkKey)) {
+          linkSet.add(linkKey);
+          links.push({
+            source: sourceId,
+            target: targetId
+          });
+
+          // Incrementar peso de conexiones en los nodos
+          const srcNode = canonicalNodes.get(sourceId);
+          if (srcNode) srcNode.val = (srcNode.val || 1) + 1;
+
+          const tgtNode = canonicalNodes.get(targetId) || missingNodes.get(targetId);
+          if (tgtNode) tgtNode.val = (tgtNode.val || 1) + 1;
+        }
       }
     }
 
+    const allNodes = [
+      ...Array.from(canonicalNodes.values()),
+      ...Array.from(missingNodes.values())
+    ];
+
     res.json({
-      nodes: Array.from(nodesMap.values()),
+      nodes: allNodes,
       links
     });
   } catch (err) {
@@ -1891,8 +2455,17 @@ app.get('/api/shared-notes/read', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'El recurso compartido no existe o fue revocado.' });
     }
 
-    const ownerUser = getUserById(share.owner_id);
     const subPath = (req.query.sub_path || '').replace(/\\/g, '/');
+    if (share.resource_type === 'vault' && !subPath) {
+      return res.status(400).json({
+        error: 'Este recurso es una bóveda completa. Puedes cambiar a ella como espacio de trabajo o navegar sus archivos.',
+        isVault: true,
+        shareId: share.id,
+        vaultName: share.vault_name
+      });
+    }
+
+    const ownerUser = getUserById(share.owner_id);
     const relativeTarget = subPath ? path.join(share.resource_path || '', subPath) : share.resource_path;
     const fullPath = resolveUserVaultPath(ownerUser, share.vault_name, relativeTarget);
 
@@ -2039,9 +2612,9 @@ app.get('/api/shared-notes/raw', requireAuth, async (req, res) => {
     }
 
     const ext = path.extname(relativeTarget).toLowerCase();
+    const contentType = MIME_TYPES_MAP[ext] || 'application/octet-stream';
     res.setHeader('Cache-Control', 'private, max-age=86400');
-    res.type(ext);
-    res.send(buffer);
+    sendBufferWithRange(req, res, buffer, contentType, path.basename(relativeTarget));
   } catch (err) {
     res.status(500).send('Error al servir archivo compartido');
   }
@@ -2089,8 +2662,15 @@ app.post('/api/shared-notes/save', requireAuth, async (req, res) => {
 
     await writeVaultFile(fullPath, content ?? '', isEnc, activeKey);
 
-    // Notificar en tiempo real al dueño de la nota
-    sendToUser(share.owner_id, 'NOTE_UPDATED', {
+    // Notificar en tiempo real al dueño de la nota y a todos los demás colaboradores con acceso a este recurso
+    const otherShareUsers = db.prepare(`
+      SELECT DISTINCT shared_with_user_id as uid
+      FROM shares
+      WHERE owner_id = ? AND vault_name = ? AND resource_path = ? AND shared_with_user_id IS NOT NULL AND shared_with_user_id != ?
+    `).all(share.owner_id, share.vault_name, share.resource_path, req.user.id);
+    const recipientIds = Array.from(new Set([share.owner_id, ...otherShareUsers.map(r => r.uid)]));
+
+    sendToUsers(recipientIds, 'NOTE_UPDATED', {
       shareId: share.id,
       title: share.resource_title,
       sub_path: subClean,
@@ -2118,18 +2698,18 @@ app.get('/api/shared-folders/tree', requireAuth, async (req, res) => {
       SELECT s.*, u.username as owner_username, u.nombres as owner_nombres, u.apellido_paterno as owner_apellido_paterno
       FROM shares s
       JOIN users u ON s.owner_id = u.id
-      WHERE s.id = ? AND s.shared_with_user_id = ? AND s.resource_type = 'folder'
+      WHERE s.id = ? AND s.shared_with_user_id = ? AND s.resource_type IN ('folder', 'vault')
     `).get(shareId, req.user.id);
 
     if (!share) {
-      return res.status(404).json({ error: 'La carpeta compartida no existe o fue revocada.' });
+      return res.status(404).json({ error: 'La carpeta o bóveda compartida no existe o fue revocada.' });
     }
 
     const ownerUser = getUserById(share.owner_id);
-    const folderDir = resolveUserVaultPath(ownerUser, share.vault_name, share.resource_path);
+    const folderDir = resolveUserVaultPath(ownerUser, share.vault_name, share.resource_path || '');
 
     if (!fsSync.existsSync(folderDir)) {
-      return res.status(404).json({ error: 'La carpeta ya no existe en la bóveda del propietario.' });
+      return res.status(404).json({ error: 'El contenido ya no existe en la bóveda del propietario.' });
     }
 
     const files = await getAllVaultFiles(folderDir, folderDir);
@@ -2394,12 +2974,27 @@ app.get('/s/:token/raw', async (req, res) => {
     const basePath = resolveUserVaultPath(ownerUser, share.vault_name, share.resource_path || '');
     let targetFile = basePath;
 
-    if (share.resource_type === 'folder' || share.resource_type === 'vault') {
+    if (req.query.file) {
       const requestedFile = req.query.file;
-      if (!requestedFile) return res.status(400).send('Archivo no especificado');
       const subSafe = path.normalize(requestedFile).replace(/^(\.\.[\/\\])+/, '');
-      targetFile = path.join(basePath, subSafe);
-      if (!targetFile.startsWith(basePath)) return res.status(403).send('Acceso no autorizado');
+      if (share.resource_type === 'folder' || share.resource_type === 'vault') {
+        targetFile = path.join(basePath, subSafe);
+        if (!targetFile.startsWith(basePath)) return res.status(403).send('Acceso no autorizado');
+      } else {
+        // En notas/archivos individuales que incrustan otros archivos (ej: ![[video.mp4]] o ![[subcarpeta/audio.weba]])
+        const vaultRoot = resolveUserVaultPath(ownerUser, share.vault_name, '');
+        const noteDir = path.dirname(basePath);
+        const relativeToNote = path.join(noteDir, subSafe);
+        const relativeToRoot = path.join(vaultRoot, subSafe);
+        if (fsSync.existsSync(relativeToNote) && relativeToNote.startsWith(vaultRoot)) {
+          targetFile = relativeToNote;
+        } else if (fsSync.existsSync(relativeToRoot) && relativeToRoot.startsWith(vaultRoot)) {
+          targetFile = relativeToRoot;
+        } else {
+          targetFile = relativeToRoot;
+        }
+        if (!targetFile.startsWith(vaultRoot)) return res.status(403).send('Acceso no autorizado');
+      }
     }
 
     if (!fsSync.existsSync(targetFile)) {
@@ -2435,27 +3030,8 @@ app.get('/s/:token/raw', async (req, res) => {
     }
 
     const ext = path.extname(targetFile).toLowerCase();
-    const mimeTypes = {
-      '.png': 'image/png',
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.webp': 'image/webp',
-      '.gif': 'image/gif',
-      '.svg': 'image/svg+xml',
-      '.pdf': 'application/pdf',
-      '.mp4': 'video/mp4',
-      '.webm': 'video/webm',
-      '.mp3': 'audio/mpeg',
-      '.wav': 'audio/wav',
-      '.ogg': 'audio/ogg',
-      '.md': 'text/markdown; charset=utf-8',
-      '.txt': 'text/plain; charset=utf-8'
-    };
-
-    const contentType = mimeTypes[ext] || 'application/octet-stream';
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(path.basename(targetFile))}"`);
-    res.send(buffer);
+    const contentType = MIME_TYPES_MAP[ext] || 'application/octet-stream';
+    sendBufferWithRange(req, res, buffer, contentType, path.basename(targetFile));
   } catch (err) {
     res.status(500).send('Error al transmitir archivo');
   }
@@ -2592,6 +3168,18 @@ app.get('/api/chat/:friendId/messages', requireAuth, (req, res) => {
     const friendId = parseInt(req.params.friendId, 10);
     const messages = getDirectMessages(req.user.id, friendId);
     markMessagesAsRead(friendId, req.user.id);
+
+    // Notificar al amigo que sus mensajes fueron leídos en tiempo real (Read Receipt / Doble Check)
+    sendToUser(friendId, 'MESSAGES_READ', {
+      readerId: req.user.id,
+      readAt: new Date().toISOString()
+    });
+
+    // Notificar a las demás pestañas abiertas del propio usuario para reiniciar el contador de no leídos
+    sendToUser(req.user.id, 'UNREAD_COUNT_RESET', {
+      friendId
+    });
+
     res.json({ messages });
   } catch (err) {
     res.status(400).json({ error: err.message || 'Error al obtener mensajes' });
@@ -2606,8 +3194,7 @@ app.post('/api/chat/:friendId/messages', requireAuth, (req, res) => {
 
     const message = sendDirectMessage(req.user.id, friendId, content);
 
-    // Notificar en tiempo real al amigo por WebSocket
-    sendToUser(friendId, 'CHAT_MESSAGE_RECEIVED', {
+    const messagePayload = {
       message: {
         ...message,
         sender: {
@@ -2616,6 +3203,15 @@ app.post('/api/chat/:friendId/messages', requireAuth, (req, res) => {
           nombre_completo: `${req.user.nombres || ''} ${req.user.apellido_paterno || ''}`.trim() || req.user.username
         }
       }
+    };
+
+    // Notificar en tiempo real al amigo por WebSocket
+    sendToUser(friendId, 'CHAT_MESSAGE_RECEIVED', messagePayload);
+
+    // Sincronizar en tiempo real con las demás pestañas/dispositivos del propio remitente (Self-Echo)
+    sendToUser(req.user.id, 'CHAT_MESSAGE_SENT', {
+      ...messagePayload,
+      recipientId: friendId
     });
 
     res.json({ success: true, message });

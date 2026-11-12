@@ -43,6 +43,12 @@ const state = {
   activeTab: 'editor', // 'editor' o 'graph'
   saveTimeout: null,
   graphInstance: null,
+  graphRawData: null,
+  graphShowOrphans: true,
+  graphShowLabels: true,
+  graphHoverNode: null,
+  graphHighlightNodes: new Set(),
+  graphHighlightLinks: new Set(),
   theme: localStorage.getItem('kortexa-theme') || 'auto',
   openFolders: new Set(JSON.parse(localStorage.getItem('kortexa-open-folders') || '[]')),
   selectedFolder: '' // Carpeta activa para crear notas
@@ -132,7 +138,9 @@ const toolbarSizeTrigger = document.getElementById('toolbar-size-trigger');
 const toolbarSizeMenu = document.getElementById('toolbar-size-menu');
 const toolbarSizeLabel = document.getElementById('toolbar-size-label');
 
-// Elementos de Carpeta en Editor
+// Elementos de Carpeta y Tipo en Editor
+const nodePrefixBadgeEl = document.getElementById('node-prefix-badge');
+const editorBreadcrumbEl = document.getElementById('editor-breadcrumb');
 const noteFolderBadge = document.getElementById('note-folder-badge');
 const noteFolderName = document.getElementById('note-folder-name');
 
@@ -1136,6 +1144,7 @@ function setupAuthEventListeners() {
 // ==========================================
 async function init() {
   applyTheme(state.theme);
+  initModalStackObserver();
   setupEventListeners();
   setupAuthEventListeners();
   setupChatWidgetEventListeners();
@@ -1194,6 +1203,12 @@ async function loadVaultInfo() {
     if (vaultDropdownLabel) {
       vaultDropdownLabel.textContent = displayName;
       vaultDropdownLabel.title = `Bóveda activa: ${displayName}`;
+    }
+
+    if (state.activeNote) {
+      updateEditorBreadcrumb(state.activeNote.folder || '');
+    } else {
+      updateEditorBreadcrumb('');
     }
 
     // Actualizar items del dropdown personalizado de bóvedas
@@ -1525,6 +1540,11 @@ async function manageVaultSecurity() {
 }
 
 async function renameVault() {
+  if (state.isVaultShared) {
+    showToast('No puedes renombrar una bóveda compartida por otro usuario', 'warning');
+    return;
+  }
+
   const currentName = state.activeVault || document.getElementById('vault-dropdown-label')?.textContent || 'vault';
   const newName = await showPromptModal({
     title: 'Renombrar Bóveda',
@@ -1545,7 +1565,7 @@ async function renameVault() {
     const res = await fetch('/api/vault/rename', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ newName: cleanName })
+      body: JSON.stringify({ oldName: currentName, newName: cleanName })
     });
 
     const data = await res.json();
@@ -1790,8 +1810,12 @@ async function loadNotesAndFolders() {
 
     state.notes = await notesRes.json();
     state.folders = await foldersRes.json();
+    state.graphRawData = null;
 
-    renderTree(state.notes, state.folders);
+    applyTreeFilter();
+    if (state.activeTab === 'graph') {
+      renderGraph(true);
+    }
   } catch (err) {
     console.error('Error cargando notas y carpetas:', err);
   }
@@ -1837,6 +1861,22 @@ async function selectNote(noteIdentifier) {
     titleInputEl.value = state.activeNote.title || state.activeNote.name || '';
     titleInputEl.readOnly = isMedia;
     noteFolderName.textContent = state.activeNote.folder || 'Raíz';
+    updateEditorBreadcrumb(state.activeNote.folder || '');
+
+    // Actualizar dinámicamente el ícono de prefijo en el encabezado
+    if (nodePrefixBadgeEl) {
+      const fileType = state.activeNote.type || 'note';
+      nodePrefixBadgeEl.innerHTML = getIconForFileType(fileType);
+      const typeLabels = {
+        note: 'Documento Markdown (.md)',
+        image: 'Archivo de Imagen',
+        video: 'Archivo de Video',
+        audio: 'Archivo de Audio',
+        pdf: 'Documento PDF',
+        other: 'Archivo Adjunto'
+      };
+      nodePrefixBadgeEl.title = typeLabels[fileType] || `Archivo (${fileType})`;
+    }
 
     if (isMedia) {
       if (editorWorkspaceEl) editorWorkspaceEl.style.display = 'none';
@@ -1870,7 +1910,7 @@ async function selectNote(noteIdentifier) {
     }
 
     loadBacklinks(state.activeNote.title || state.activeNote.name);
-    renderTree(state.notes, state.folders);
+    applyTreeFilter();
 
     // Cerrar drawer lateral en vista móvil al seleccionar una nota
     closeMobileSidebar();
@@ -1933,9 +1973,7 @@ async function saveCurrentNote() {
     const saved = await res.json();
     state.activeNote = saved;
     noteFolderName.textContent = saved.folder || 'Raíz';
-    if (saved && saved.filename) {
-      saveLastActiveNote(saved.filename);
-    }
+    updateEditorBreadcrumb(saved.folder || '');
     if (saved && saved.filename) {
       saveLastActiveNote(saved.filename);
     }
@@ -1951,7 +1989,73 @@ async function saveCurrentNote() {
 }
 
 // ==========================================
-// 3. COMPONENTE MODAL DE ALERTAS Y TOASTS
+// 3. GESTOR DE PILA DINÁMICO DE MODALES (MODAL STACK MANAGER)
+// Resuelve permanentemente el problema de modales encimados o atrapados en el fondo
+// ==========================================
+const ModalStackManager = {
+  stack: [],
+  baseZIndex: 2000,
+  stepZIndex: 30,
+
+  push(modalEl) {
+    if (!modalEl) return;
+    this.remove(modalEl);
+    this.stack.push(modalEl);
+
+    const currentZ = this.baseZIndex + (this.stack.length * this.stepZIndex);
+    // Si es el modal de alertas/prompts/confirmaciones, asegurar máxima prioridad visual
+    if (modalEl.id === 'modal-container') {
+      modalEl.style.zIndex = Math.max(3500, currentZ + 1000);
+    } else {
+      modalEl.style.zIndex = currentZ;
+    }
+  },
+
+  remove(modalEl) {
+    if (!modalEl) return;
+    const idx = this.stack.indexOf(modalEl);
+    if (idx !== -1) {
+      this.stack.splice(idx, 1);
+    }
+    if (!modalEl.classList.contains('active')) {
+      modalEl.style.zIndex = '';
+    }
+  },
+
+  getTopModal() {
+    return this.stack.length > 0 ? this.stack[this.stack.length - 1] : null;
+  },
+
+  isTopModal(modalEl) {
+    return this.getTopModal() === modalEl;
+  }
+};
+
+function initModalStackObserver() {
+  const modals = document.querySelectorAll('.modal-backdrop');
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      if (mutation.attributeName === 'class') {
+        const target = mutation.target;
+        if (target.classList.contains('active')) {
+          ModalStackManager.push(target);
+        } else {
+          ModalStackManager.remove(target);
+        }
+      }
+    });
+  });
+
+  modals.forEach((modal) => {
+    observer.observe(modal, { attributes: true, attributeFilter: ['class'] });
+    if (modal.classList.contains('active')) {
+      ModalStackManager.push(modal);
+    }
+  });
+}
+
+// ==========================================
+// COMPONENTE MODAL DE ALERTAS Y TOASTS
 // ==========================================
 function showConfirmModal({
   title = '¿Confirmar acción?',
@@ -1986,32 +2090,44 @@ function showConfirmModal({
       `;
     }
 
+    ModalStackManager.push(modalContainer);
     modalContainer.classList.add('active');
     modalBtnConfirm.focus();
 
     function cleanup(result) {
       modalContainer.classList.remove('active');
+      ModalStackManager.remove(modalContainer);
       modalBtnConfirm.removeEventListener('click', onConfirm);
       modalBtnCancel.removeEventListener('click', onCancel);
       modalContainer.removeEventListener('click', onBackdrop);
-      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onKeyDown, true);
       resolve(result);
     }
 
-    function onConfirm() { cleanup(true); }
-    function onCancel() { cleanup(false); }
+    function onConfirm(e) { if (e) e.stopPropagation(); cleanup(true); }
+    function onCancel(e) { if (e) e.stopPropagation(); cleanup(false); }
     function onBackdrop(e) {
-      if (e.target === modalContainer) cleanup(false);
+      if (e.target === modalContainer) {
+        e.stopPropagation();
+        cleanup(false);
+      }
     }
     function onKeyDown(e) {
-      if (e.key === 'Escape') cleanup(false);
-      if (e.key === 'Enter') cleanup(true);
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        cleanup(false);
+      } else if (e.key === 'Enter') {
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        cleanup(true);
+      }
     }
 
     modalBtnConfirm.addEventListener('click', onConfirm);
     modalBtnCancel.addEventListener('click', onCancel);
     modalContainer.addEventListener('click', onBackdrop);
-    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKeyDown, true);
   });
 }
 
@@ -2041,6 +2157,7 @@ function showPromptModal({
     modalInputField.value = defaultValue;
     modalInputField.placeholder = placeholder;
 
+    ModalStackManager.push(modalContainer);
     modalContainer.classList.add('active');
     setTimeout(() => {
       modalInputField.focus();
@@ -2049,32 +2166,45 @@ function showPromptModal({
 
     function cleanup(result) {
       modalContainer.classList.remove('active');
+      ModalStackManager.remove(modalContainer);
       modalInputContainer.style.display = 'none';
       modalBtnConfirm.removeEventListener('click', onConfirm);
       modalBtnCancel.removeEventListener('click', onCancel);
       modalContainer.removeEventListener('click', onBackdrop);
-      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onKeyDown, true);
       resolve(result);
     }
 
-    function onConfirm() { 
+    function onConfirm(e) { 
+      if (e) e.stopPropagation();
       cleanup(modalInputField.value.trim()); 
     }
-    function onCancel() { 
+    function onCancel(e) { 
+      if (e) e.stopPropagation();
       cleanup(null); 
     }
     function onBackdrop(e) {
-      if (e.target === modalContainer) cleanup(null);
+      if (e.target === modalContainer) {
+        e.stopPropagation();
+        cleanup(null);
+      }
     }
     function onKeyDown(e) {
-      if (e.key === 'Escape') cleanup(null);
-      if (e.key === 'Enter') cleanup(modalInputField.value.trim());
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        cleanup(null);
+      } else if (e.key === 'Enter') {
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        cleanup(modalInputField.value.trim());
+      }
     }
 
     modalBtnConfirm.addEventListener('click', onConfirm);
     modalBtnCancel.addEventListener('click', onCancel);
     modalContainer.addEventListener('click', onBackdrop);
-    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKeyDown, true);
   });
 }
 
@@ -2103,16 +2233,91 @@ function showToast(message, type = 'info', duration = 3000) {
   }, duration);
 }
 
-// Eliminar nota o archivo multimedia actual
-async function deleteCurrentNote() {
-  if (!state.activeNote) return;
+// Renombrar un archivo en la bóveda (soporta cualquier formato: .png, .pdf, .mp4, .md, etc.)
+async function renameVaultFile(oldPath, currentDisplayName) {
+  if (state.isVaultShared && state.vaultPermission !== 'write') {
+    showToast('Permiso denegado: esta bóveda compartida es de solo lectura', 'warning');
+    return;
+  }
 
-  const isMedia = state.activeNote.type && state.activeNote.type !== 'note';
-  const itemLabel = isMedia ? 'archivo multimedia' : 'pensamiento';
+  const cleanOld = (oldPath || '').replace(/\\/g, '/').replace(/^\/+/, '').trim();
+  if (!cleanOld) return;
+
+  const currentBasename = currentDisplayName || cleanOld.split('/').pop();
+  const lastDot = currentBasename.lastIndexOf('.');
+  const ext = lastDot > 0 ? currentBasename.substring(lastDot) : '';
+  const baseName = lastDot > 0 ? currentBasename.substring(0, lastDot) : currentBasename;
+
+  const newName = await showPromptModal({
+    title: 'Renombrar Archivo',
+    message: ext ? `Nuevo nombre para "${currentBasename}" (se preservará la extensión ${ext}):` : `Nuevo nombre para "${currentBasename}":`,
+    placeholder: 'Nuevo nombre...',
+    defaultValue: baseName,
+    confirmText: 'Renombrar',
+    cancelText: 'Cancelar'
+  });
+
+  if (!newName || newName.trim() === '' || newName.trim() === baseName) {
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/fs/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        oldPath: cleanOld,
+        newName: newName.trim()
+      })
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      showToast(data.error || 'Error al renombrar el archivo', 'danger');
+      return;
+    }
+
+    showToast(`Archivo renombrado a "${data.name}"`, 'success');
+
+    // Si el archivo renombrado era el que estaba activo en la vista
+    if (state.activeNote && (state.activeNote.filename === cleanOld || state.activeNote.name === currentBasename)) {
+      state.activeNote.filename = data.newPath;
+      state.activeNote.name = data.name;
+      state.activeNote.title = data.name;
+      if (state.activeNote.url) {
+        state.activeNote.url = `/api/vault-raw/${encodeURIComponent(data.newPath)}`;
+      }
+      saveLastActiveNote(data.newPath);
+
+      titleInputEl.value = data.name;
+      if (state.activeNote.type && state.activeNote.type !== 'note') {
+        renderMediaViewer(state.activeNote);
+      }
+    }
+
+    await loadNotesAndFolders();
+  } catch (err) {
+    console.error('Error al renombrar archivo:', err);
+    showToast('Error de conexión al renombrar archivo', 'danger');
+  }
+}
+
+// Eliminar un archivo o nota en la bóveda
+async function deleteVaultFile(filePath, displayName, fileType = 'note') {
+  if (state.isVaultShared && state.vaultPermission !== 'write') {
+    showToast('Permiso denegado: esta bóveda compartida es de solo lectura', 'warning');
+    return;
+  }
+
+  const cleanPath = (filePath || '').replace(/\\/g, '/').replace(/^\/+/, '').trim();
+  if (!cleanPath) return;
+
+  const itemName = displayName || cleanPath.split('/').pop();
+  const isMedia = fileType && fileType !== 'note';
 
   const confirmed = await showConfirmModal({
-    title: isMedia ? 'Eliminar Archivo' : 'Eliminar Pensamiento',
-    message: `¿Estás seguro de que deseas eliminar permanentemente "${state.activeNote.name || state.activeNote.title}"? Esta acción borrará el archivo físico de tu bóveda.`,
+    title: isMedia ? 'Eliminar Archivo' : 'Eliminar Nota',
+    message: `¿Estás seguro de que deseas eliminar permanentemente "${itemName}"? Esta acción borrará el archivo físico de tu bóveda.`,
     confirmText: 'Eliminar',
     cancelText: 'Cancelar',
     danger: true,
@@ -2121,33 +2326,58 @@ async function deleteCurrentNote() {
 
   if (!confirmed) return;
 
-  const deletedTitle = state.activeNote.name || state.activeNote.title;
-
   try {
-    await fetch(`/api/notes?path=${encodeURIComponent(state.activeNote.filename)}`, {
+    const res = await fetch(`/api/notes?path=${encodeURIComponent(cleanPath)}`, {
       method: 'DELETE'
     });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      showToast(errData.error || 'Error al eliminar el archivo', 'danger');
+      return;
+    }
 
-    showToast(`"${deletedTitle}" eliminado`, 'danger');
-    state.activeNote = null;
-    clearLastActiveNote();
-    await loadNotesAndFolders();
+    showToast(`"${itemName}" eliminado`, 'danger');
 
-    if (state.notes.length > 0) {
-      restoreOrSelectDefaultNote();
+    // Si el archivo eliminado era el que estaba activo en la vista
+    if (state.activeNote && (state.activeNote.filename === cleanPath || state.activeNote.name === itemName)) {
+      state.activeNote = null;
+      clearLastActiveNote();
+      await loadNotesAndFolders();
+
+      if (state.notes.length > 0) {
+        restoreOrSelectDefaultNote();
+      } else {
+        titleInputEl.value = '';
+        markdownInputEl.value = '';
+        markdownPreviewEl.innerHTML = '';
+        if (mediaViewerWorkspaceEl) mediaViewerWorkspaceEl.style.display = 'none';
+        if (editorWorkspaceEl) editorWorkspaceEl.style.display = '';
+        backlinksListEl.innerHTML = '';
+        backlinksCountEl.textContent = '0';
+        noteFolderName.textContent = 'Raíz';
+        updateEditorBreadcrumb('');
+        if (nodePrefixBadgeEl) {
+          nodePrefixBadgeEl.innerHTML = getIconForFileType('note');
+          nodePrefixBadgeEl.title = 'Documento Markdown (.md)';
+        }
+      }
     } else {
-      titleInputEl.value = '';
-      markdownInputEl.value = '';
-      markdownPreviewEl.innerHTML = '';
-      if (mediaViewerWorkspaceEl) mediaViewerWorkspaceEl.style.display = 'none';
-      if (editorWorkspaceEl) editorWorkspaceEl.style.display = '';
-      backlinksListEl.innerHTML = '';
-      backlinksCountEl.textContent = '0';
-      noteFolderName.textContent = 'Raíz';
+      await loadNotesAndFolders();
     }
   } catch (err) {
+    console.error('Error al eliminar archivo:', err);
     showToast('Error al eliminar el archivo de la bóveda', 'danger');
   }
+}
+
+// Eliminar nota o archivo multimedia actual
+async function deleteCurrentNote() {
+  if (!state.activeNote) return;
+  await deleteVaultFile(
+    state.activeNote.filename,
+    state.activeNote.name || state.activeNote.title,
+    state.activeNote.type
+  );
 }
 
 // Crear nueva carpeta (admite targetParent opcional, o usa la carpeta seleccionada/activa)
@@ -2197,7 +2427,7 @@ function collapseAllFolders() {
   state.openFolders.clear();
   state.selectedFolder = '';
   saveOpenFolders();
-  renderTree(state.notes, state.folders);
+  applyTreeFilter();
   showToast('Todas las carpetas colapsadas', 'info', 1500);
 }
 
@@ -2278,14 +2508,40 @@ function showFolderActionMenu(buttonEl, folderPath, folderName) {
         <polyline points="17 8 12 3 7 8"/>
         <line x1="12" y1="3" x2="12" y2="15"/>
       </svg>
-      <span>Subir Multimedia...</span>
+      <span>Subir Archivos...</span>
+    </button>
+    <div class="folder-menu-divider"></div>
+    <button class="folder-menu-item" id="menu-opt-share">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+      </svg>
+      <span>Compartir Carpeta...</span>
+    </button>
+    <button class="folder-menu-item" id="menu-opt-rename">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+      </svg>
+      <span>Renombrar Carpeta</span>
+    </button>
+    <div class="folder-menu-divider"></div>
+    <button class="folder-menu-item danger" id="menu-opt-delete">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="3 6 5 6 21 6"/>
+        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+        <line x1="10" y1="11" x2="10" y2="17"/>
+        <line x1="14" y1="11" x2="14" y2="17"/>
+      </svg>
+      <span>Eliminar Carpeta</span>
     </button>
   `;
 
   document.body.appendChild(menu);
   activeFolderMenu = menu;
 
-  const menuWidth = 185;
+  const menuWidth = 195;
+  const menuHeight = 245;
   let top = rect.bottom + 6;
   let left = rect.right - menuWidth;
 
@@ -2293,8 +2549,8 @@ function showFolderActionMenu(buttonEl, folderPath, folderName) {
   if (left + menuWidth > window.innerWidth - 10) {
     left = window.innerWidth - menuWidth - 10;
   }
-  if (top + 130 > window.innerHeight) {
-    top = Math.max(10, rect.top - 120);
+  if (top + menuHeight > window.innerHeight) {
+    top = Math.max(10, rect.top - menuHeight - 4);
   }
 
   menu.style.top = `${top}px`;
@@ -2321,6 +2577,130 @@ function showFolderActionMenu(buttonEl, folderPath, folderName) {
       mediaFileInput.dataset.targetFolder = folderPath;
       mediaFileInput.click();
     }
+  });
+
+  menu.querySelector('#menu-opt-share').addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeFolderMenu();
+    openShareModalForResource({
+      path: folderPath,
+      title: folderName,
+      type: 'folder'
+    });
+  });
+
+  menu.querySelector('#menu-opt-rename').addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeFolderMenu();
+    renameFolder(folderPath, folderName);
+  });
+
+  menu.querySelector('#menu-opt-delete').addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeFolderMenu();
+    deleteFolder(folderPath);
+  });
+}
+
+// Menú contextual flotante para acciones de archivo o nota
+let activeNoteMenu = null;
+
+function closeNoteMenu() {
+  if (activeNoteMenu) {
+    document.querySelectorAll('.note-item.menu-open').forEach(li => li.classList.remove('menu-open'));
+    activeNoteMenu.remove();
+    activeNoteMenu = null;
+  }
+}
+
+function showNoteActionMenu(buttonEl, filePath, displayName, fileType) {
+  const parentItem = buttonEl.closest('.note-item');
+
+  if (activeNoteMenu && activeNoteMenu.dataset.path === filePath) {
+    closeNoteMenu();
+    return;
+  }
+  closeNoteMenu();
+  closeFolderMenu();
+
+  if (parentItem) parentItem.classList.add('menu-open');
+
+  const rect = buttonEl.getBoundingClientRect();
+  const menu = document.createElement('div');
+  menu.className = 'folder-action-menu note-action-menu';
+  menu.dataset.path = filePath;
+
+  menu.innerHTML = `
+    <div class="folder-menu-header">
+      <span>"${displayName}"</span>
+    </div>
+    <button class="folder-menu-item" id="menu-note-rename">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+      </svg>
+      <span>Renombrar</span>
+    </button>
+    <button class="folder-menu-item" id="menu-note-share">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+      </svg>
+      <span>Compartir...</span>
+    </button>
+    <div class="folder-menu-divider"></div>
+    <button class="folder-menu-item danger" id="menu-note-delete">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="3 6 5 6 21 6"/>
+        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+        <line x1="10" y1="11" x2="10" y2="17"/>
+        <line x1="14" y1="11" x2="14" y2="17"/>
+      </svg>
+      <span>Eliminar</span>
+    </button>
+  `;
+
+  document.body.appendChild(menu);
+  activeNoteMenu = menu;
+
+  const menuWidth = 175;
+  const menuHeight = 155;
+  let top = rect.bottom + 6;
+  let left = rect.right - menuWidth;
+
+  if (left < 10) left = 10;
+  if (left + menuWidth > window.innerWidth - 10) {
+    left = window.innerWidth - menuWidth - 10;
+  }
+  if (top + menuHeight > window.innerHeight) {
+    top = Math.max(10, rect.top - menuHeight - 4);
+  }
+
+  menu.style.top = `${top}px`;
+  menu.style.left = `${left}px`;
+
+  requestAnimationFrame(() => menu.classList.add('visible'));
+
+  menu.querySelector('#menu-note-rename').addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeNoteMenu();
+    renameVaultFile(filePath, displayName);
+  });
+
+  menu.querySelector('#menu-note-share').addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeNoteMenu();
+    openShareModalForResource({
+      path: filePath,
+      title: displayName,
+      type: fileType || 'file'
+    });
+  });
+
+  menu.querySelector('#menu-note-delete').addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeNoteMenu();
+    deleteVaultFile(filePath, displayName, fileType);
   });
 }
 
@@ -2365,6 +2745,48 @@ function getIconForFileType(type) {
     default:
       return `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>`;
   }
+}
+
+// Actualiza el breadcrumb de ruta (solo texto informativo) debajo del título en el editor
+function updateEditorBreadcrumb(folderPath, customRoot = null) {
+  const breadcrumbEl = document.getElementById('editor-breadcrumb');
+  if (!breadcrumbEl) return;
+  breadcrumbEl.innerHTML = '';
+
+  const isShared = !!(state.activeNote && state.activeNote.isSharedWithMe);
+  const rootName = customRoot || (isShared ? (state.activeNote?.folder || 'Compartido') : (state.activeVault || 'Bóveda'));
+
+  const segments = [rootName];
+
+  if (isShared) {
+    if (state.activeNote && state.activeNote.subPath) {
+      const cleanSub = state.activeNote.subPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').trim();
+      if (cleanSub) {
+        segments.push(...cleanSub.split('/'));
+      }
+    }
+  } else {
+    const cleanFolder = (folderPath || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').trim();
+    if (cleanFolder) {
+      segments.push(...cleanFolder.split('/'));
+    }
+  }
+
+  const fullPathText = segments.join(' / ');
+  breadcrumbEl.title = `Ubicación: ${fullPathText}`;
+
+  segments.forEach((seg, idx) => {
+    if (idx > 0) {
+      const sep = document.createElement('span');
+      sep.className = 'breadcrumb-separator';
+      sep.textContent = '/';
+      breadcrumbEl.appendChild(sep);
+    }
+    const item = document.createElement('span');
+    item.className = 'breadcrumb-segment';
+    item.textContent = seg;
+    breadcrumbEl.appendChild(item);
+  });
 }
 
 function renderMediaViewer(media) {
@@ -2435,6 +2857,13 @@ function renderMediaViewer(media) {
         <span class="meta-tag size">${formatFileSize(size)}</span>
       </div>
       <div class="media-meta-actions">
+        <button id="btn-rename-media" class="media-action-btn" title="Renombrar archivo">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>
+          <span>Renombrar</span>
+        </button>
         <button id="btn-copy-embed" class="media-action-btn" title="Copiar código de incrustación">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           <span>Copiar ![[${displayName}]]</span>
@@ -2471,6 +2900,11 @@ function renderMediaViewer(media) {
   document.getElementById('btn-copy-embed')?.addEventListener('click', () => {
     navigator.clipboard.writeText(embedCode);
     showToast(`Incrustación copiada: ${embedCode}`, 'success');
+  });
+
+  // Renombrar archivo desde el visor
+  document.getElementById('btn-rename-media')?.addEventListener('click', () => {
+    renameVaultFile(filename, displayName);
   });
 }
 
@@ -2551,6 +2985,7 @@ async function moveCurrentNoteFolder() {
     const saved = await res.json();
     state.activeNote = saved;
     noteFolderName.textContent = saved.folder || 'Raíz';
+    updateEditorBreadcrumb(saved.folder || '');
     if (saved && saved.filename) {
       saveLastActiveNote(saved.filename);
     }
@@ -2564,6 +2999,100 @@ async function moveCurrentNoteFolder() {
     await loadNotesAndFolders();
   } catch (err) {
     showToast('Error al mover la nota', 'danger');
+  }
+}
+
+// Renombrar carpeta o subcarpeta en la bóveda
+async function renameFolder(folderPath, currentFolderName) {
+  if (state.isVaultShared && state.vaultPermission !== 'write') {
+    showToast('Permiso denegado: esta bóveda compartida es de solo lectura', 'warning');
+    return;
+  }
+
+  const cleanOld = (folderPath || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').trim();
+  if (!cleanOld) return;
+
+  const currentName = currentFolderName || cleanOld.split('/').pop();
+
+  const newName = await showPromptModal({
+    title: 'Renombrar Carpeta',
+    message: `Ingresa el nuevo nombre para "${currentName}":`,
+    placeholder: 'Nombre de la carpeta...',
+    defaultValue: currentName,
+    confirmText: 'Renombrar',
+    cancelText: 'Cancelar'
+  });
+
+  if (!newName || newName.trim() === '' || newName.trim() === currentName) {
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/folders/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        oldPath: cleanOld,
+        newName: newName.trim()
+      })
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      showToast(data.error || 'Error al renombrar la carpeta', 'danger');
+      return;
+    }
+
+    showToast(`Carpeta renombrada a "${data.name}"`, 'success');
+
+    // Actualizar estado de carpetas abiertas
+    const updatedOpenFolders = new Set();
+    const oldPrefix = cleanOld + '/';
+    const newPrefix = data.newPath + '/';
+
+    state.openFolders.forEach(openPath => {
+      if (openPath === cleanOld) {
+        updatedOpenFolders.add(data.newPath);
+      } else if (openPath.startsWith(oldPrefix)) {
+        updatedOpenFolders.add(newPrefix + openPath.substring(oldPrefix.length));
+      } else {
+        updatedOpenFolders.add(openPath);
+      }
+    });
+    state.openFolders = updatedOpenFolders;
+    saveOpenFolders();
+
+    // Actualizar carpeta seleccionada
+    if (state.selectedFolder === cleanOld) {
+      state.selectedFolder = data.newPath;
+    } else if (state.selectedFolder && state.selectedFolder.startsWith(oldPrefix)) {
+      state.selectedFolder = newPrefix + state.selectedFolder.substring(oldPrefix.length);
+    }
+
+    // Actualizar nota activa si residía en esta carpeta o subcarpeta
+    if (state.activeNote && state.activeNote.folder) {
+      if (state.activeNote.folder === cleanOld) {
+        state.activeNote.folder = data.newPath;
+        const noteName = state.activeNote.filename.split('/').pop();
+        state.activeNote.filename = `${data.newPath}/${noteName}`;
+        noteFolderName.textContent = data.newPath;
+        updateEditorBreadcrumb(data.newPath);
+        saveLastActiveNote(state.activeNote.filename);
+      } else if (state.activeNote.folder.startsWith(oldPrefix)) {
+        const updatedSubFolder = newPrefix + state.activeNote.folder.substring(oldPrefix.length);
+        state.activeNote.folder = updatedSubFolder;
+        const noteName = state.activeNote.filename.split('/').pop();
+        state.activeNote.filename = `${updatedSubFolder}/${noteName}`;
+        noteFolderName.textContent = updatedSubFolder;
+        updateEditorBreadcrumb(updatedSubFolder);
+        saveLastActiveNote(state.activeNote.filename);
+      }
+    }
+
+    await loadNotesAndFolders();
+  } catch (err) {
+    console.error('Error al renombrar carpeta:', err);
+    showToast('Error de conexión al renombrar la carpeta', 'danger');
   }
 }
 
@@ -2893,6 +3422,147 @@ function countTotalNotesInFolder(folderNode) {
   return count;
 }
 
+// ==========================================
+// DRAG & DROP EN ÁRBOL DE ARCHIVOS Y CARPETAS
+// ==========================================
+function clearAllDragOver() {
+  document.querySelectorAll('.drag-over, .drag-over-upload, .drag-over-root, .drag-over-root-upload, .is-dragging').forEach(el => {
+    el.classList.remove('drag-over', 'drag-over-upload', 'drag-over-root', 'drag-over-root-upload', 'is-dragging');
+  });
+}
+
+function isOsFileDragEvent(e) {
+  if (!e.dataTransfer || !e.dataTransfer.types) return false;
+  const types = Array.from(e.dataTransfer.types);
+  return types.includes('Files') && !types.includes('application/json');
+}
+
+async function moveVaultItem(type, sourcePath, targetFolder) {
+  if (state.isVaultShared && state.vaultPermission !== 'write') {
+    showToast('Permiso denegado: esta bóveda compartida es de solo lectura', 'warning');
+    return;
+  }
+
+  if (!sourcePath) return;
+
+  const cleanSource = sourcePath.replace(/\\/g, '/').replace(/^\/+/, '').trim();
+  const cleanTarget = (targetFolder || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').trim();
+
+  // Calcular la carpeta actual del elemento origen
+  const sourceFolder = cleanSource.includes('/') ? cleanSource.substring(0, cleanSource.lastIndexOf('/')) : '';
+
+  // Si la carpeta destino es idéntica a donde ya reside, no hay nada que hacer
+  if (sourceFolder === cleanTarget) {
+    return;
+  }
+
+  // Si es una carpeta, verificar que no se intente mover dentro de sí misma o de sus subcarpetas
+  if (type === 'folder') {
+    if (cleanTarget === cleanSource || cleanTarget.startsWith(cleanSource + '/')) {
+      showToast('No puedes mover una carpeta dentro de sí misma o de sus subcarpetas', 'warning');
+      return;
+    }
+  }
+
+  try {
+    const res = await fetch('/api/fs/move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourcePath: cleanSource,
+        targetFolder: cleanTarget
+      })
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      showToast(data.error || 'Error al mover el elemento', 'danger');
+      return;
+    }
+
+    const destLabel = cleanTarget ? `carpeta "${cleanTarget}"` : 'raíz de la bóveda';
+    showToast(`"${data.name}" movido a la ${destLabel}`, 'success');
+
+    // Si la nota activa fue la que se movió, actualizar la referencia en memoria
+    if (state.activeNote && (state.activeNote.filename === cleanSource || state.activeNote.filename === data.oldPath)) {
+      state.activeNote.filename = data.newPath;
+      state.activeNote.folder = cleanTarget;
+      if (noteFolderName) {
+        noteFolderName.textContent = cleanTarget || 'Raíz';
+      }
+      updateEditorBreadcrumb(cleanTarget || '');
+    }
+
+    // Si se movió a una carpeta, asegurarse de abrirla
+    if (cleanTarget) {
+      state.openFolders.add(cleanTarget);
+      saveOpenFolders();
+    }
+
+    await loadNotesAndFolders();
+  } catch (err) {
+    console.error('Error al mover elemento:', err);
+    showToast('Error de conexión al mover el elemento', 'danger');
+  }
+}
+
+function normalizeSearchText(str) {
+  if (!str) return '';
+  return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+}
+
+function applyTreeFilter() {
+  const rawTerm = searchInputEl?.value || '';
+  const term = normalizeSearchText(rawTerm);
+
+  if (!term) {
+    try {
+      state.openFolders = new Set(JSON.parse(localStorage.getItem('kortexa-open-folders') || '[]'));
+    } catch (_) {}
+    renderTree(state.notes, state.folders);
+    return;
+  }
+
+  // 1. Filtrar notas que coincidan por título, nombre o ruta de carpeta
+  const filteredNotes = state.notes.filter(n => {
+    const titleNorm = normalizeSearchText(n.title);
+    const nameNorm = normalizeSearchText(n.name);
+    const folderNorm = normalizeSearchText(n.folder);
+    return titleNorm.includes(term) || nameNorm.includes(term) || folderNorm.includes(term);
+  });
+
+  const matchingFolderPaths = new Set();
+
+  // 2. Incluir carpetas y sus ancestros de notas coincidentes
+  filteredNotes.forEach(note => {
+    if (note.folder) {
+      let acc = '';
+      note.folder.split('/').forEach(p => {
+        acc = acc ? `${acc}/${p}` : p;
+        matchingFolderPaths.add(acc);
+        state.openFolders.add(acc);
+      });
+    }
+  });
+
+  // 3. Incluir carpetas cuyo propio nombre o ruta coincida con el término (incluso si están vacías)
+  // y todos sus ancestros para mantener la jerarquía visible
+  (state.folders || []).forEach(fPath => {
+    const folderPathNorm = normalizeSearchText(fPath);
+    if (folderPathNorm.includes(term)) {
+      let acc = '';
+      fPath.split('/').forEach(p => {
+        acc = acc ? `${acc}/${p}` : p;
+        matchingFolderPaths.add(acc);
+        state.openFolders.add(acc);
+      });
+    }
+  });
+
+  const filteredFolders = Array.from(matchingFolderPaths);
+  renderTree(filteredNotes, filteredFolders);
+}
+
 function renderTree(notesToRender, folders) {
   notesListEl.innerHTML = '';
   notesCountEl.textContent = notesToRender.length;
@@ -2914,9 +3584,101 @@ function renderTree(notesToRender, folders) {
 
       const header = document.createElement('div');
       header.className = 'folder-header';
+      header.setAttribute('draggable', 'true');
+      header.dataset.folderPath = subNode.fullPath;
+      header.dataset.folderName = subNode.name;
       if (state.selectedFolder === subNode.fullPath) {
         header.classList.add('active-folder');
       }
+
+      // Drag and Drop para la carpeta
+      header.addEventListener('dragstart', (e) => {
+        if (e.target.closest('button')) {
+          e.preventDefault();
+          return;
+        }
+        e.stopPropagation();
+        e.dataTransfer.setData('application/json', JSON.stringify({
+          type: 'folder',
+          path: subNode.fullPath,
+          name: subNode.name
+        }));
+        e.dataTransfer.effectAllowed = 'move';
+        folderGroup.classList.add('is-dragging');
+        document.body.classList.add('vault-dragging');
+      });
+
+      header.addEventListener('dragend', () => {
+        folderGroup.classList.remove('is-dragging');
+        document.body.classList.remove('vault-dragging');
+        clearAllDragOver();
+      });
+
+      let hoverExpandTimer = null;
+
+      header.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const isExternalFiles = isOsFileDragEvent(e);
+        if (isExternalFiles) {
+          e.dataTransfer.dropEffect = 'copy';
+          header.classList.add('drag-over-upload');
+          header.classList.remove('drag-over');
+        } else {
+          e.dataTransfer.dropEffect = 'move';
+          header.classList.add('drag-over');
+          header.classList.remove('drag-over-upload');
+        }
+
+        if (!state.openFolders.has(subNode.fullPath) && !hoverExpandTimer) {
+          hoverExpandTimer = setTimeout(() => {
+            state.openFolders.add(subNode.fullPath);
+            folderGroup.classList.add('open');
+            saveOpenFolders();
+            hoverExpandTimer = null;
+          }, 550);
+        }
+      });
+
+      header.addEventListener('dragleave', (e) => {
+        if (!header.contains(e.relatedTarget)) {
+          header.classList.remove('drag-over', 'drag-over-upload');
+          if (hoverExpandTimer) {
+            clearTimeout(hoverExpandTimer);
+            hoverExpandTimer = null;
+          }
+        }
+      });
+
+      header.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        header.classList.remove('drag-over', 'drag-over-upload');
+        if (hoverExpandTimer) {
+          clearTimeout(hoverExpandTimer);
+          hoverExpandTimer = null;
+        }
+
+        // Si se soltaron archivos desde la PC (Explorador de Windows) hacia esta carpeta
+        const files = e.dataTransfer?.files;
+        if (files && files.length > 0) {
+          await uploadFilesToVault(files, subNode.fullPath);
+          state.openFolders.add(subNode.fullPath);
+          folderGroup.classList.add('open');
+          saveOpenFolders();
+          return;
+        }
+
+        try {
+          const raw = e.dataTransfer.getData('application/json');
+          if (!raw) return;
+          const data = JSON.parse(raw);
+          await moveVaultItem(data.type, data.path, subNode.fullPath);
+        } catch (err) {
+          console.error('Error al procesar drop en carpeta:', err);
+        }
+      });
 
       header.innerHTML = `
         <div class="folder-title-wrap">
@@ -2926,44 +3688,22 @@ function renderTree(notesToRender, folders) {
         </div>
         <div class="folder-meta">
           <span class="folder-badge">${folderTotal}</span>
-          <button class="folder-share-btn" title="Compartir carpeta ${subNode.name}">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
-              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+          <button class="folder-options-btn" title="Opciones de ${subNode.name}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="1.5"/>
+              <circle cx="19" cy="12" r="1.5"/>
+              <circle cx="5" cy="12" r="1.5"/>
             </svg>
-          </button>
-          <button class="folder-add-btn" title="Añadir nota o subcarpeta en ${subNode.name}">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
-          </button>
-          <button class="folder-delete-btn" title="Eliminar carpeta ${subNode.name}">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
       `;
 
       // Clic para expandir/colapsar o seleccionar carpeta
       header.addEventListener('click', (e) => {
-        const shareBtn = e.target.closest('.folder-share-btn');
-        if (shareBtn) {
+        const optionsBtn = e.target.closest('.folder-options-btn');
+        if (optionsBtn) {
           e.stopPropagation();
-          openShareModalForResource({
-            path: subNode.fullPath,
-            title: subNode.name,
-            type: 'folder'
-          });
-          return;
-        }
-
-        const addBtn = e.target.closest('.folder-add-btn');
-        if (addBtn) {
-          e.stopPropagation();
-          showFolderActionMenu(addBtn, subNode.fullPath, subNode.name);
-          return;
-        }
-
-        if (e.target.closest('.folder-delete-btn')) {
-          e.stopPropagation();
-          deleteFolder(subNode.fullPath);
+          showFolderActionMenu(optionsBtn, subNode.fullPath, subNode.name);
           return;
         }
 
@@ -3011,15 +3751,100 @@ function renderTree(notesToRender, folders) {
       notesListEl.appendChild(noteEl);
     });
   }
+
+  // Mensaje cuando la búsqueda no produce resultados
+  if (searchInputEl && searchInputEl.value.trim() && notesToRender.length === 0 && (!folders || folders.length === 0)) {
+    const emptyMsg = document.createElement('div');
+    emptyMsg.className = 'tree-no-results';
+    emptyMsg.style.cssText = 'padding: 24px 12px; font-size: 12.5px; color: var(--text-muted); text-align: center;';
+    emptyMsg.textContent = 'No se encontraron notas ni carpetas';
+    notesListEl.appendChild(emptyMsg);
+  }
+
+  // Zona de soltado para mover a la raíz (visible al arrastrar)
+  const rootDropEl = document.createElement('div');
+  rootDropEl.className = 'root-drop-indicator';
+  rootDropEl.innerHTML = `
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+      <polyline points="12 11 12 17 9 14"/>
+      <polyline points="12 17 15 14"/>
+    </svg>
+    <span>Mover a la Raíz</span>
+  `;
+  rootDropEl.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const isExternalFiles = isOsFileDragEvent(e);
+    if (isExternalFiles) {
+      e.dataTransfer.dropEffect = 'copy';
+      rootDropEl.classList.add('drag-over-upload');
+      rootDropEl.classList.remove('drag-over');
+    } else {
+      e.dataTransfer.dropEffect = 'move';
+      rootDropEl.classList.add('drag-over');
+      rootDropEl.classList.remove('drag-over-upload');
+    }
+  });
+  rootDropEl.addEventListener('dragleave', (e) => {
+    if (!rootDropEl.contains(e.relatedTarget)) {
+      rootDropEl.classList.remove('drag-over', 'drag-over-upload');
+    }
+  });
+  rootDropEl.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    rootDropEl.classList.remove('drag-over', 'drag-over-upload');
+
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) {
+      await uploadFilesToVault(files, '');
+      return;
+    }
+
+    try {
+      const raw = e.dataTransfer.getData('application/json');
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      await moveVaultItem(data.type, data.path, '');
+    } catch (err) {
+      console.error('Error al soltar en la raíz:', err);
+    }
+  });
+  notesListEl.appendChild(rootDropEl);
 }
 
 function createNoteListItem(note) {
   const li = document.createElement('li');
   const fileType = note.type || 'note';
   li.className = `note-item type-${fileType}`;
+  li.setAttribute('draggable', 'true');
+  li.dataset.path = note.filename;
+  li.dataset.type = 'file';
+  li.dataset.name = note.name || note.title;
+
   if (state.activeNote && (state.activeNote.filename === note.filename || state.activeNote.title === note.title || state.activeNote.name === note.name)) {
     li.classList.add('active');
   }
+
+  // Drag and Drop para archivo/nota
+  li.addEventListener('dragstart', (e) => {
+    e.stopPropagation();
+    e.dataTransfer.setData('application/json', JSON.stringify({
+      type: 'file',
+      path: note.filename,
+      name: note.name || note.title
+    }));
+    e.dataTransfer.effectAllowed = 'move';
+    li.classList.add('is-dragging');
+    document.body.classList.add('vault-dragging');
+  });
+
+  li.addEventListener('dragend', () => {
+    li.classList.remove('is-dragging');
+    document.body.classList.remove('vault-dragging');
+    clearAllDragOver();
+  });
 
   const iconSpan = document.createElement('span');
   iconSpan.className = 'note-item-icon';
@@ -3030,8 +3855,28 @@ function createNoteListItem(note) {
   titleSpan.textContent = note.name || note.title;
   titleSpan.title = note.folder ? `${note.folder}/${note.name || note.title}` : (note.name || note.title);
 
+  const actionsDiv = document.createElement('div');
+  actionsDiv.className = 'note-item-actions';
+
+  const optionsBtn = document.createElement('button');
+  optionsBtn.className = 'note-options-btn';
+  optionsBtn.title = `Opciones de ${note.name || note.title}`;
+  optionsBtn.innerHTML = `
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="1.5"/>
+      <circle cx="19" cy="12" r="1.5"/>
+      <circle cx="5" cy="12" r="1.5"/>
+    </svg>
+  `;
+  optionsBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showNoteActionMenu(optionsBtn, note.filename, note.name || note.title, fileType);
+  });
+  actionsDiv.appendChild(optionsBtn);
+
   li.appendChild(iconSpan);
   li.appendChild(titleSpan);
+  li.appendChild(actionsDiv);
 
   li.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -3129,46 +3974,214 @@ function notifyFortuneSheetsThemeChange() {
 }
 
 // ==========================================
-// 7. VISTA DE GRAFO INTERACTIVO
+// 7. VISTA DE GRAFO INTERACTIVO (RED SINÁPTICA)
 // ==========================================
-async function renderGraph() {
-  try {
-    const res = await fetch('/api/graph');
-    const graphData = await res.json();
-    const container = document.getElementById('graph-container');
-    container.innerHTML = '';
+function getFilteredGraphData() {
+  if (!state.graphRawData) return { nodes: [], links: [] };
+  const { nodes, links } = state.graphRawData;
 
-    const width = container.clientWidth || (window.innerWidth <= 768 ? window.innerWidth : window.innerWidth - 300);
-    const height = container.clientHeight || window.innerHeight;
+  if (state.graphShowOrphans) {
+    return { nodes: [...nodes], links: [...links] };
+  }
+
+  // Filtrar nodos que tengan al menos una conexión
+  const connectedIds = new Set();
+  links.forEach(l => {
+    const s = typeof l.source === 'object' ? l.source.id : l.source;
+    const t = typeof l.target === 'object' ? l.target.id : l.target;
+    if (s) connectedIds.add(s);
+    if (t) connectedIds.add(t);
+  });
+
+  const filteredNodes = nodes.filter(n => connectedIds.has(n.id));
+  return { nodes: filteredNodes, links: [...links] };
+}
+
+function updateGraphStats(data) {
+  const nodesEl = document.getElementById('graph-stat-nodes');
+  const linksEl = document.getElementById('graph-stat-links');
+  if (nodesEl) {
+    const count = data.nodes ? data.nodes.length : 0;
+    nodesEl.textContent = `${count} ${count === 1 ? 'pensamiento' : 'pensamientos'}`;
+  }
+  if (linksEl) {
+    const count = data.links ? data.links.length : 0;
+    linksEl.textContent = `${count} ${count === 1 ? 'conexión' : 'conexiones'}`;
+  }
+}
+
+async function renderGraph(forceReload = false) {
+  try {
+    const container = document.getElementById('graph-container');
+    if (!container) return;
+
+    if (!state.graphRawData || forceReload) {
+      const res = await fetch('/api/graph');
+      if (!res.ok) throw new Error('Error al obtener datos del grafo');
+      state.graphRawData = await res.json();
+    }
+
+    const filteredData = getFilteredGraphData();
+    updateGraphStats(filteredData);
 
     const isDark = getResolvedTheme() === 'dark';
     const bgColor = isDark ? '#070a13' : '#f8fafc';
     const activeColor = isDark ? '#00f2fe' : '#0284c7';
     const existColor = isDark ? '#818cf8' : '#4f46e5';
     const missingColor = isDark ? '#f43f5e' : '#e11d48';
-    const linkColor = isDark ? 'rgba(129, 140, 248, 0.25)' : 'rgba(79, 70, 229, 0.2)';
-    const particleColor = isDark ? '#00f2fe' : '#0284c7';
+    const mediaColor = isDark ? '#10b981' : '#059669';
+    const defaultTextColor = isDark ? '#e2e8f0' : '#1e293b';
+
+    // Si ya existe instancia y el canvas está en DOM, actualizar datos suavemente
+    if (state.graphInstance && container.querySelector('canvas')) {
+      const width = container.clientWidth || window.innerWidth;
+      const height = container.clientHeight || window.innerHeight;
+      state.graphInstance
+        .width(width)
+        .height(height)
+        .backgroundColor(bgColor)
+        .graphData(filteredData);
+      return;
+    }
+
+    container.innerHTML = '';
+    const width = container.clientWidth || (window.innerWidth <= 768 ? window.innerWidth : window.innerWidth - 300);
+    const height = container.clientHeight || window.innerHeight;
 
     state.graphInstance = ForceGraph()(container)
       .width(width)
       .height(height)
       .backgroundColor(bgColor)
-      .graphData(graphData)
+      .graphData(filteredData)
       .nodeId('id')
-      .nodeLabel(node => node.folder ? `${node.name} (📁 ${node.folder})` : node.name)
-      .nodeColor(node => {
-        if (state.activeNote && node.id === state.activeNote.title) return activeColor;
-        return node.exists ? existColor : missingColor;
+      .nodeLabel(node => {
+        const folderLabel = node.folder ? ` (📁 ${node.folder})` : '';
+        const statusLabel = node.exists ? '' : ' [No creada aún]';
+        const connCount = node.val || 1;
+        const connLabel = connCount > 1 ? ` — ${connCount} conexiones` : '';
+        return `<strong>${escapeHtml(node.title || node.name)}</strong>${escapeHtml(folderLabel + statusLabel + connLabel)}`;
       })
-      .nodeRelSize(7)
-      .linkColor(() => linkColor)
-      .linkDirectionalParticles(3)
+      .nodeCanvasObject((node, ctx, globalScale) => {
+        const isHovered = state.graphHoverNode && state.graphHoverNode.id === node.id;
+        const isNeighbor = state.graphHighlightNodes.size > 0 && state.graphHighlightNodes.has(node.id);
+        const isActive = state.activeNote && (
+          node.id === state.activeNote.filename ||
+          node.id === state.activeNote.title ||
+          node.filename === state.activeNote.filename
+        );
+
+        // Radio proporcional a val (conexiones de la red)
+        const connCount = node.val || 1;
+        const radius = Math.min(18, Math.max(5.5, Math.sqrt(connCount) * 3.8));
+
+        // Color de la neurona/nodo
+        let nodeColor = existColor;
+        if (isActive) {
+          nodeColor = activeColor;
+        } else if (!node.exists) {
+          nodeColor = missingColor;
+        } else if (node.type && node.type !== 'note') {
+          nodeColor = mediaColor;
+        }
+
+        const isDimmed = state.graphHoverNode && !isHovered && !isNeighbor;
+        ctx.globalAlpha = isDimmed ? 0.15 : 1;
+
+        // Halo resplandeciente para nodo activo o bajo cursor
+        if (isActive || isHovered) {
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, radius + 4, 0, 2 * Math.PI, false);
+          ctx.fillStyle = isActive ? 'rgba(0, 242, 254, 0.28)' : 'rgba(129, 140, 248, 0.35)';
+          ctx.fill();
+        }
+
+        // Círculo principal
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI, false);
+        ctx.fillStyle = nodeColor;
+        ctx.fill();
+
+        ctx.strokeStyle = isHovered ? '#ffffff' : (isDark ? 'rgba(255, 255, 255, 0.25)' : 'rgba(0, 0, 0, 0.15)');
+        ctx.lineWidth = isHovered ? 2 : 1;
+        ctx.stroke();
+
+        // Renderizado de nombres de notas directamente en el lienzo
+        if (state.graphShowLabels && (globalScale >= 0.75 || isHovered || isActive || connCount >= 4)) {
+          const label = node.title || node.name || '';
+          const fontSize = Math.max(10.5 / globalScale, 3.2);
+          ctx.font = `${isActive ? 'bold ' : ''}${fontSize}px 'Plus Jakarta Sans', system-ui, sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+
+          const textY = node.y + radius + 3;
+          ctx.fillStyle = isDark ? 'rgba(7, 10, 19, 0.85)' : 'rgba(255, 255, 255, 0.85)';
+          ctx.fillText(label, node.x, textY);
+
+          ctx.fillStyle = isHovered ? activeColor : (isActive ? activeColor : defaultTextColor);
+          ctx.fillText(label, node.x, textY);
+        }
+
+        ctx.globalAlpha = 1;
+      })
+      .nodePointerAreaPaint((node, color, ctx) => {
+        const connCount = node.val || 1;
+        const radius = Math.min(18, Math.max(5.5, Math.sqrt(connCount) * 3.8)) + 3;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI, false);
+        ctx.fill();
+      })
+      .linkColor(link => {
+        if (state.graphHoverNode) {
+          const isHighlighted = state.graphHighlightLinks.has(link);
+          return isHighlighted ? activeColor : (isDark ? 'rgba(255, 255, 255, 0.03)' : 'rgba(0, 0, 0, 0.04)');
+        }
+        return isDark ? 'rgba(129, 140, 248, 0.28)' : 'rgba(79, 70, 229, 0.22)';
+      })
+      .linkWidth(link => {
+        if (state.graphHoverNode && state.graphHighlightLinks.has(link)) {
+          return 2.5;
+        }
+        return 1.2;
+      })
+      .linkDirectionalParticles(link => {
+        if (state.graphHoverNode && state.graphHighlightLinks.has(link)) {
+          return 4;
+        }
+        return 1;
+      })
       .linkDirectionalParticleSpeed(0.007)
-      .linkDirectionalParticleColor(() => particleColor)
-      .linkDirectionalParticleWidth(2)
+      .linkDirectionalParticleColor(() => activeColor)
+      .linkDirectionalParticleWidth(link => {
+        return (state.graphHoverNode && state.graphHighlightLinks.has(link)) ? 3 : 1.8;
+      })
+      .onNodeHover(node => {
+        state.graphHighlightNodes.clear();
+        state.graphHighlightLinks.clear();
+        state.graphHoverNode = node || null;
+
+        if (node && state.graphRawData && state.graphRawData.links) {
+          state.graphHighlightNodes.add(node.id);
+          state.graphRawData.links.forEach(link => {
+            const s = typeof link.source === 'object' ? link.source.id : link.source;
+            const t = typeof link.target === 'object' ? link.target.id : link.target;
+            if (s === node.id || t === node.id) {
+              state.graphHighlightLinks.add(link);
+              state.graphHighlightNodes.add(s);
+              state.graphHighlightNodes.add(t);
+            }
+          });
+        }
+      })
       .onNodeClick(node => {
         selectNote(node.filename || node.id);
       });
+
+    setTimeout(() => {
+      if (state.graphInstance) {
+        state.graphInstance.zoomToFit(600, 50);
+      }
+    }, 400);
   } catch (err) {
     console.error('Error inicializando grafo:', err);
   }
@@ -3208,36 +4221,62 @@ function switchTab(tabName) {
 }
 
 function setupEventListeners() {
+  // Soporte para soltar en el contenedor principal de notas (raíz de la bóveda)
+  notesListEl?.addEventListener('dragover', (e) => {
+    if (!e.target.closest('.folder-header') && !e.target.closest('.root-drop-indicator')) {
+      e.preventDefault();
+      const isExternalFiles = isOsFileDragEvent(e);
+      if (isExternalFiles) {
+        e.dataTransfer.dropEffect = 'copy';
+        notesListEl.classList.add('drag-over-root-upload');
+        notesListEl.classList.remove('drag-over-root');
+      } else {
+        e.dataTransfer.dropEffect = 'move';
+        notesListEl.classList.add('drag-over-root');
+        notesListEl.classList.remove('drag-over-root-upload');
+      }
+    }
+  });
+
+  notesListEl?.addEventListener('dragleave', (e) => {
+    if (!notesListEl.contains(e.relatedTarget)) {
+      notesListEl.classList.remove('drag-over-root', 'drag-over-root-upload');
+    }
+  });
+
+  notesListEl?.addEventListener('drop', async (e) => {
+    if (!e.target.closest('.folder-header') && !e.target.closest('.root-drop-indicator')) {
+      e.preventDefault();
+      e.stopPropagation();
+      notesListEl.classList.remove('drag-over-root', 'drag-over-root-upload');
+
+      // Si se soltaron archivos del equipo hacia la raíz
+      const files = e.dataTransfer?.files;
+      if (files && files.length > 0) {
+        await uploadFilesToVault(files, '');
+        return;
+      }
+
+      try {
+        const raw = e.dataTransfer.getData('application/json');
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        await moveVaultItem(data.type, data.path, '');
+      } catch (err) {
+        console.error('Error al procesar drop en lista raíz:', err);
+      }
+    }
+  });
+
   // Controles de apertura y cierre de sidebar móvil
   btnToggleSidebarEl?.addEventListener('click', openMobileSidebar);
   btnGraphMenuEl?.addEventListener('click', openMobileSidebar);
   btnCloseSidebarEl?.addEventListener('click', closeMobileSidebar);
   sidebarBackdropEl?.addEventListener('click', closeMobileSidebar);
 
-  // Input de búsqueda (expande carpetas que tengan coincidencias)
-  searchInputEl.addEventListener('input', (e) => {
-    const term = e.target.value.toLowerCase().trim();
-    if (!term) {
-      renderTree(state.notes, state.folders);
-      return;
-    }
-
-    const filtered = state.notes.filter(n => 
-      n.title.toLowerCase().includes(term) || (n.folder && n.folder.toLowerCase().includes(term))
-    );
-
-    // Expandir carpetas de las notas coincidentes
-    filtered.forEach(note => {
-      if (note.folder) {
-        let acc = '';
-        note.folder.split('/').forEach(p => {
-          acc = acc ? `${acc}/${p}` : p;
-          state.openFolders.add(acc);
-        });
-      }
-    });
-
-    renderTree(filtered, state.folders);
+  // Input de búsqueda (filtra notas y carpetas, ocultando las que no coincidan)
+  searchInputEl.addEventListener('input', () => {
+    applyTreeFilter();
   });
 
   // Limpiar búsqueda con tecla Escape
@@ -3245,7 +4284,7 @@ function setupEventListeners() {
     if (e.key === 'Escape' && searchInputEl.value) {
       e.stopPropagation();
       searchInputEl.value = '';
-      renderTree(state.notes, state.folders);
+      applyTreeFilter();
       searchInputEl.blur();
     }
   });
@@ -3294,18 +4333,45 @@ function setupEventListeners() {
     createNewNoteInFolder(targetFolder);
   });
 
-  // Cerrar menú contextual de carpeta al hacer clic fuera, scroll o Escape
+  // Cerrar menús contextuales de carpetas y archivos al hacer clic fuera, scroll o Escape
   document.addEventListener('click', (e) => {
-    if (!e.target.closest('.folder-action-menu') && !e.target.closest('.folder-add-btn')) {
+    if (!e.target.closest('.folder-action-menu') && !e.target.closest('.folder-options-btn') && !e.target.closest('.folder-add-btn')) {
       closeFolderMenu();
     }
+    if (!e.target.closest('.note-action-menu') && !e.target.closest('.note-options-btn')) {
+      closeNoteMenu();
+    }
   });
-  window.addEventListener('resize', closeFolderMenu);
-  window.addEventListener('scroll', closeFolderMenu, true);
+  window.addEventListener('resize', () => { closeFolderMenu(); closeNoteMenu(); });
+  window.addEventListener('scroll', () => { closeFolderMenu(); closeNoteMenu(); }, true);
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      // Si hay modales activos en la pila, cerrar SOLO el modal superior
+      if (ModalStackManager.stack.length > 0) {
+        const topModal = ModalStackManager.getTopModal();
+        if (topModal === modalContainer) {
+          // El propio diálogo de alerta/confirmación maneja su escape y limpieza
+          return;
+        }
+        if (topModal === vaultManagerModal) {
+          closeVaultManagerModal();
+          return;
+        }
+        if (topModal === shareModal) {
+          closeShareModal();
+          return;
+        }
+        const closeBtn = topModal.querySelector('.modal-close-btn, #btn-modal-cancel, #modal-btn-cancel, [data-action="close"]');
+        if (closeBtn) {
+          closeBtn.click();
+        } else {
+          topModal.classList.remove('active');
+        }
+        return;
+      }
+
       closeFolderMenu();
-      closeVaultManagerModal();
+      closeNoteMenu();
       closeVaultDropdown();
       closeVaultMoreMenu();
     }
@@ -3397,7 +4463,9 @@ function setupEventListeners() {
   });
   btnCloseVaultManager?.addEventListener('click', closeVaultManagerModal);
   vaultManagerModal?.addEventListener('click', (e) => {
-    if (e.target === vaultManagerModal) closeVaultManagerModal();
+    if (e.target === vaultManagerModal && ModalStackManager.isTopModal(vaultManagerModal)) {
+      closeVaultManagerModal();
+    }
   });
 
   // Botones de seguridad / bloqueo de bóveda
@@ -3499,43 +4567,119 @@ function setupEventListeners() {
     }
   });
 
-  // Soporte Drag & Drop de archivos hacia la bóveda
-  window.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    document.body.classList.add('drag-active');
+  // Controles de la Red Sináptica
+  const btnGraphZoomIn = document.getElementById('btn-graph-zoom-in');
+  const btnGraphZoomOut = document.getElementById('btn-graph-zoom-out');
+  const btnGraphFit = document.getElementById('btn-graph-fit');
+  const btnGraphToggleOrphans = document.getElementById('btn-graph-toggle-orphans');
+  const btnGraphToggleLabels = document.getElementById('btn-graph-toggle-labels');
+  const graphSearchInput = document.getElementById('graph-search-input');
+  const btnGraphSearchClear = document.getElementById('btn-graph-search-clear');
+
+  btnGraphZoomIn?.addEventListener('click', () => {
+    if (!state.graphInstance) return;
+    const currentZoom = state.graphInstance.zoom();
+    state.graphInstance.zoom(currentZoom * 1.35, 350);
   });
 
-  window.addEventListener('dragleave', (e) => {
-    if (e.relatedTarget === null) {
-      document.body.classList.remove('drag-active');
+  btnGraphZoomOut?.addEventListener('click', () => {
+    if (!state.graphInstance) return;
+    const currentZoom = state.graphInstance.zoom();
+    state.graphInstance.zoom(currentZoom / 1.35, 350);
+  });
+
+  btnGraphFit?.addEventListener('click', () => {
+    if (!state.graphInstance) return;
+    state.graphInstance.zoomToFit(600, 45);
+  });
+
+  btnGraphToggleOrphans?.addEventListener('click', () => {
+    state.graphShowOrphans = !state.graphShowOrphans;
+    btnGraphToggleOrphans.classList.toggle('active', state.graphShowOrphans);
+    btnGraphToggleOrphans.title = state.graphShowOrphans 
+      ? 'Notas aisladas: Visibles (clic para ocultar)' 
+      : 'Notas aisladas: Ocultas (clic para mostrar)';
+    if (state.graphInstance) {
+      const filtered = getFilteredGraphData();
+      state.graphInstance.graphData(filtered);
+      updateGraphStats(filtered);
+      showToast(state.graphShowOrphans ? 'Mostrando todas las notas' : 'Ocultando notas sin conexiones', 'info', 1500);
     }
   });
 
-  window.addEventListener('drop', async (e) => {
-    e.preventDefault();
-    document.body.classList.remove('drag-active');
-
-    const files = e.dataTransfer?.files;
-    if (!files || files.length === 0) return;
-
-    const targetFolder = state.selectedFolder || (state.activeNote ? state.activeNote.folder : '');
-    await uploadFilesToVault(files, targetFolder);
-
-    // Si se soltó sobre el editor textarea, insertar ![[archivo.ext]] automáticamente
-    if (e.target === markdownInputEl && state.activeNote && state.activeNote.type === 'note') {
-      const insertText = Array.from(files).map(f => `![[${f.name}]]`).join('\n');
-      const startPos = markdownInputEl.selectionStart || markdownInputEl.value.length;
-      const val = markdownInputEl.value;
-      markdownInputEl.value = val.substring(0, startPos) + '\n' + insertText + '\n' + val.substring(startPos);
-      scheduleSave();
-      renderMarkdown();
+  btnGraphToggleLabels?.addEventListener('click', () => {
+    state.graphShowLabels = !state.graphShowLabels;
+    btnGraphToggleLabels.classList.toggle('active', state.graphShowLabels);
+    btnGraphToggleLabels.title = state.graphShowLabels ? 'Nombres de notas: Visibles' : 'Nombres de notas: Ocultos';
+    if (state.graphInstance) {
+      state.graphInstance.nodeColor(state.graphInstance.nodeColor());
     }
   });
 
-  // Redimensionar grafo si la ventana cambia de tamaño
+  graphSearchInput?.addEventListener('input', (e) => {
+    const query = e.target.value.trim();
+    if (btnGraphSearchClear) {
+      btnGraphSearchClear.style.display = query ? 'flex' : 'none';
+    }
+    if (!query || !state.graphInstance || !state.graphRawData) return;
+
+    const term = normalizeSearchText(query);
+    const match = state.graphRawData.nodes.find(n => {
+      const titleNorm = normalizeSearchText(n.title || '');
+      const nameNorm = normalizeSearchText(n.name || '');
+      return titleNorm.includes(term) || nameNorm.includes(term);
+    });
+
+    if (match && typeof match.x === 'number' && typeof match.y === 'number') {
+      state.graphInstance.centerAt(match.x, match.y, 600);
+      state.graphInstance.zoom(2.5, 600);
+      state.graphHighlightNodes.clear();
+      state.graphHighlightNodes.add(match.id);
+      state.graphHoverNode = match;
+    }
+  });
+
+  graphSearchInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const query = graphSearchInput.value.trim();
+      if (!query || !state.graphRawData) return;
+      const term = normalizeSearchText(query);
+      const match = state.graphRawData.nodes.find(n => {
+        const titleNorm = normalizeSearchText(n.title || '');
+        const nameNorm = normalizeSearchText(n.name || '');
+        return titleNorm.includes(term) || nameNorm.includes(term);
+      });
+      if (match) {
+        selectNote(match.filename || match.id);
+      }
+    }
+  });
+
+  btnGraphSearchClear?.addEventListener('click', () => {
+    if (graphSearchInput) {
+      graphSearchInput.value = '';
+      btnGraphSearchClear.style.display = 'none';
+      state.graphHighlightNodes.clear();
+      state.graphHighlightLinks.clear();
+      state.graphHoverNode = null;
+      if (state.graphInstance) {
+        state.graphInstance.zoomToFit(600, 45);
+      }
+    }
+  });
+
+  // Redimensionar grafo suavemente sin destruir canvas ni perder posición
+  let graphResizeTimer = null;
   window.addEventListener('resize', () => {
     if (state.activeTab === 'graph' && state.graphInstance) {
-      renderGraph();
+      clearTimeout(graphResizeTimer);
+      graphResizeTimer = setTimeout(() => {
+        const container = document.getElementById('graph-container');
+        if (!container || !state.graphInstance) return;
+        const width = container.clientWidth || window.innerWidth;
+        const height = container.clientHeight || window.innerHeight;
+        state.graphInstance.width(width).height(height);
+      }, 150);
     }
   });
 }
@@ -3817,6 +4961,11 @@ function setupMarkdownToolbar() {
     if (!isOpen && toolbarHeadingDropdown) {
       toolbarHeadingDropdown.classList.add('open');
       toolbarHeadingTrigger?.setAttribute('aria-expanded', 'true');
+      if (toolbarHeadingMenu && toolbarHeadingTrigger) {
+        const rect = toolbarHeadingTrigger.getBoundingClientRect();
+        toolbarHeadingMenu.style.top = `${rect.bottom + 5}px`;
+        toolbarHeadingMenu.style.left = `${Math.max(10, Math.min(rect.left, window.innerWidth - 250))}px`;
+      }
     }
   }
 
@@ -3827,6 +4976,11 @@ function setupMarkdownToolbar() {
     if (!isOpen && toolbarSizeDropdown) {
       toolbarSizeDropdown.classList.add('open');
       toolbarSizeTrigger?.setAttribute('aria-expanded', 'true');
+      if (toolbarSizeMenu && toolbarSizeTrigger) {
+        const rect = toolbarSizeTrigger.getBoundingClientRect();
+        toolbarSizeMenu.style.top = `${rect.bottom + 5}px`;
+        toolbarSizeMenu.style.left = `${Math.max(10, Math.min(rect.left, window.innerWidth - 250))}px`;
+      }
     }
   }
 
@@ -3933,6 +5087,30 @@ function setupMarkdownToolbar() {
     }
   });
 
+  // Desplazamiento horizontal fluido y autocierre de dropdowns
+  markdownToolbarEl?.addEventListener('scroll', () => {
+    closeAllToolbarDropdowns();
+    const popover = document.getElementById('editor-emoji-popover');
+    if (popover && popover.style.display !== 'none') {
+      toggleEditorEmojiPopover(false);
+    }
+  }, { passive: true });
+
+  markdownToolbarEl?.addEventListener('wheel', (e) => {
+    if (e.deltaY !== 0 && !e.shiftKey) {
+      e.preventDefault();
+      markdownToolbarEl.scrollLeft += e.deltaY;
+    }
+  }, { passive: false });
+
+  window.addEventListener('resize', () => {
+    closeAllToolbarDropdowns();
+    const popover = document.getElementById('editor-emoji-popover');
+    if (popover && popover.style.display !== 'none') {
+      toggleEditorEmojiPopover(false);
+    }
+  });
+
   // Detección contextual dinámica según la línea en la que se ubica el cursor
   function updateToolbarFromCursor() {
     if (!markdownInputEl) return;
@@ -3970,8 +5148,82 @@ function setupMarkdownToolbar() {
   markdownInputEl?.addEventListener('click', updateToolbarFromCursor);
   markdownInputEl?.addEventListener('select', updateToolbarFromCursor);
 
+  // Párrafos canónicos de Lorem Ipsum para expansión de snippets
+  const LOREM_PARAGRAPHS = [
+    "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.",
+    "Curabitur pretium tincidunt lacus. Nulla gravida orci a odio. Nullam varius, turpis et commodo pharetra, est eros bibendum elit, nec luctus magna felis sollicitudin mauris. Integer in mauris eu nibh euismod gravida. Duis ac tellus et risus vulputate vehicula. Donec lobortis risus a elit. Etiam tempor. Ut ullamcorper, ligula eu tempor congue, eros est euismod turpis, id tincidunt sapien risus a quam.",
+    "Pellentesque habitant morbi tristique senectus et netus et malesuada fames ac turpis egestas. Proin pharetra nonummy pede. Mauris et orci. Aenean nec lorem. In porttitor. Donec laoreet nonummy augue. Suspendisse dui purus, scelerisque at, vulputate vitae, pretium mattis, nunc. Mauris eget neque at sem venenatis eleifend. Ut nonummy.",
+    "Fusce aliquet pede non pede. Suspendisse dapibus lorem pellentesque magna. Integer nulla. Donec blandit feugiat ligula. Donec hendrerit, felis et imperdiet euismod, purus ipsum pretium metus, in lacinia nulla nisl eget sapien. Donec ut est in lectus consequat consequat.",
+    "Sed egestas, ante et vulputate volutpat, eros pede semper est, vitae luctus metus libero eu augue. Morbi purus libero, faucibus adipiscing, commodo quis, gravida id, est. Sed lectus. Praesent elementum hendrerit tortor. Sed semper lorem at felis. Vestibulum volutpat, lacus a ultrices sagittis, mi neque euismod dui, eu pulvinar nunc sapien ornare nisl."
+  ];
+
+  function generateLoremIpsum(paragraphsCount = 1) {
+    const count = Math.max(1, Math.min(paragraphsCount || 1, 10));
+    const result = [];
+    for (let i = 0; i < count; i++) {
+      result.push(LOREM_PARAGRAPHS[i % LOREM_PARAGRAPHS.length]);
+    }
+    return result.join('\n\n');
+  }
+
   // Atajos de teclado en el editor Markdown
   markdownInputEl.addEventListener('keydown', (e) => {
+    // Expansión de snippets (lorem + Tab) e indentación con Tabulador
+    if (e.key === 'Tab') {
+      e.preventDefault();
+
+      const start = markdownInputEl.selectionStart;
+      const end = markdownInputEl.selectionEnd;
+      const textBefore = markdownInputEl.value.substring(0, start);
+
+      // Comprobar si la palabra inmediatamente antes del cursor es lorem o loremN (ej. lorem, lorem2, lorem5)
+      const loremMatch = textBefore.match(/(?:^|\s)(lorem)(\d*)$/i);
+      if (loremMatch && !e.shiftKey) {
+        const fullWord = (loremMatch[0].startsWith(' ') || loremMatch[0].startsWith('\n')) ? loremMatch[0].slice(1) : loremMatch[0];
+        const numParagraphs = parseInt(loremMatch[2], 10) || 1;
+        const loremText = generateLoremIpsum(numParagraphs);
+        const matchStart = start - fullWord.length;
+
+        // Seleccionar la palabra "lorem" para reemplazarla con insertText (mantiene historial Ctrl+Z)
+        markdownInputEl.setSelectionRange(matchStart, start);
+
+        if (!document.execCommand('insertText', false, loremText)) {
+          const val = markdownInputEl.value;
+          markdownInputEl.value = val.substring(0, matchStart) + loremText + val.substring(end);
+          const newPos = matchStart + loremText.length;
+          markdownInputEl.setSelectionRange(newPos, newPos);
+        }
+
+        markdownInputEl.dispatchEvent(new Event('input', { bubbles: true }));
+        renderMarkdown();
+        scheduleSave();
+        return;
+      }
+
+      // Si no es lorem: indentar con 2 espacios o desindentar con Shift+Tab
+      if (!e.shiftKey) {
+        if (!document.execCommand('insertText', false, '  ')) {
+          const val = markdownInputEl.value;
+          markdownInputEl.value = val.substring(0, start) + '  ' + val.substring(end);
+          markdownInputEl.setSelectionRange(start + 2, start + 2);
+        }
+      } else {
+        if (textBefore.endsWith('  ')) {
+          markdownInputEl.setSelectionRange(start - 2, start);
+          if (!document.execCommand('delete')) {
+            const val = markdownInputEl.value;
+            markdownInputEl.value = val.substring(0, start - 2) + val.substring(end);
+            markdownInputEl.setSelectionRange(start - 2, start - 2);
+          }
+        }
+      }
+
+      markdownInputEl.dispatchEvent(new Event('input', { bubbles: true }));
+      renderMarkdown();
+      scheduleSave();
+      return;
+    }
+
     if (e.ctrlKey || e.metaKey) {
       const key = e.key.toLowerCase();
       if (key === 'b') {
@@ -6146,7 +7398,7 @@ function setupDiagramFullscreenEventListeners() {
 
   // Salir con tecla Escape
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && modal.classList.contains('active')) {
+    if (e.key === 'Escape' && modal.classList.contains('active') && ModalStackManager.isTopModal(modal)) {
       closeDiagramFullscreenModal();
     }
   });
@@ -6289,7 +7541,60 @@ function renderSharedUserGroups(itemsToRender) {
       const permIcon = isWrite ? '✍️' : '👁️';
       const permTitle = isWrite ? 'Puede editar' : 'Solo lectura';
 
-      if (item.resource_type === 'folder') {
+      if (item.resource_type === 'vault') {
+        const vaultWrapper = document.createElement('div');
+        vaultWrapper.className = 'shared-vault-item shared-folder-item';
+        vaultWrapper.dataset.shareId = item.id;
+
+        const isVaultOpen = openSharedFoldersState.has(item.id);
+
+        vaultWrapper.innerHTML = `
+          <div class="shared-resource-row shared-vault-row ${isVaultOpen ? 'open' : ''}" style="margin-bottom: 2px;">
+            <div class="shared-resource-left" title="Bóveda completa: ${escapeHtml(item.resource_title)}">
+              <svg class="shared-folder-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="transform: ${isVaultOpen ? 'rotate(90deg)' : 'rotate(0deg)'}; transition: transform 0.15s ease; flex-shrink: 0;">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" style="flex-shrink: 0;">
+                <rect x="2" y="2" width="20" height="20" rx="4"/>
+                <circle cx="12" cy="12" r="4"/>
+              </svg>
+              <span class="shared-resource-title" style="font-weight: 600;">${escapeHtml(item.resource_title)}</span>
+              <span class="shared-vault-pill-badge">BÓVEDA</span>
+            </div>
+            <div class="shared-resource-right" style="display: flex; align-items: center; gap: 4px;">
+              <button type="button" class="btn-switch-to-vault" title="Abrir como espacio de trabajo en el explorador">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 3h6v6"/><path d="M10 14L21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+                <span>Abrir</span>
+              </button>
+              <span class="shared-resource-perm-tag" title="${permTitle}">${permIcon}</span>
+            </div>
+          </div>
+          <ul class="shared-folder-sublist" style="display: ${isVaultOpen ? 'block' : 'none'}; list-style: none; padding-left: 18px; margin: 2px 0 6px 0;"></ul>
+        `;
+
+        const vaultRow = vaultWrapper.querySelector('.shared-resource-row');
+        const sublistEl = vaultWrapper.querySelector('.shared-folder-sublist');
+        const btnSwitch = vaultWrapper.querySelector('.btn-switch-to-vault');
+
+        // Botón "Abrir": cambiar workspace activo a esta bóveda completa
+        btnSwitch?.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          toggleSharedDrawer(false);
+          await switchVault(null, item.id);
+        });
+
+        // Clic en la fila: expandir/colapsar notas y subcarpetas de la bóveda compartida
+        vaultRow.addEventListener('click', (e) => {
+          e.stopPropagation();
+          toggleSharedFolder(item, vaultWrapper, vaultRow, sublistEl);
+        });
+
+        if (isVaultOpen) {
+          fetchAndRenderSharedFolderFiles(item, sublistEl);
+        }
+
+        itemsListEl.appendChild(vaultWrapper);
+      } else if (item.resource_type === 'folder') {
         const folderWrapper = document.createElement('div');
         folderWrapper.className = 'shared-folder-item';
         folderWrapper.dataset.shareId = item.id;
@@ -6497,6 +7802,7 @@ async function openSharedFolderFile(folderShare, file, providedPassword = null) 
     titleInputEl.value = data.title;
     titleInputEl.readOnly = isMedia || folderShare.permission !== 'write';
     noteFolderName.textContent = `${folderShare.resource_title} (@${folderShare.owner.username})`;
+    updateEditorBreadcrumb(file.folder || '', `${folderShare.resource_title} (@${folderShare.owner.username})`);
 
     if (isMedia) {
       if (editorWorkspaceEl) editorWorkspaceEl.style.display = 'none';
@@ -6517,6 +7823,13 @@ async function openSharedFolderFile(folderShare, file, providedPassword = null) 
       markdownInputEl.readOnly = folderShare.permission !== 'write';
       renderMarkdown();
       setSaveStatus(folderShare.permission === 'write' ? 'Guardado' : 'Solo Lectura');
+
+      // Si el recurso compartido es de solo lectura, abrir directamente en Modo Renderizado (Vista Previa)
+      if (folderShare.permission !== 'write') {
+        editorWorkspaceEl.className = 'editor-body preview-mode';
+        setActiveModeBtn(btnModePreview);
+        if (markdownToolbarEl) markdownToolbarEl.style.display = 'none';
+      }
     }
 
     // Cambiar a vista de editor si estábamos en grafo
@@ -6547,6 +7860,10 @@ async function openSharedFolderFile(folderShare, file, providedPassword = null) 
 }
 
 async function openSharedNote(item, providedPassword = null) {
+  if (item && item.resource_type === 'vault') {
+    toggleSharedDrawer(false);
+    return switchVault(null, item.id);
+  }
   try {
     const headers = {};
     if (providedPassword) headers['x-vault-password'] = providedPassword;
@@ -6591,6 +7908,7 @@ async function openSharedNote(item, providedPassword = null) {
     titleInputEl.value = data.title;
     titleInputEl.readOnly = isMedia || data.permission !== 'write';
     noteFolderName.textContent = `Compartido por @${data.owner.username}`;
+    updateEditorBreadcrumb('', `Compartido (@${data.owner.username})`);
 
     if (isMedia) {
       if (editorWorkspaceEl) editorWorkspaceEl.style.display = 'none';
@@ -6611,6 +7929,13 @@ async function openSharedNote(item, providedPassword = null) {
       markdownInputEl.readOnly = data.permission !== 'write';
       renderMarkdown();
       setSaveStatus(data.permission === 'write' ? 'Guardado' : 'Solo Lectura');
+
+      // Si el recurso compartido es de solo lectura, abrir directamente en Modo Renderizado (Vista Previa)
+      if (data.permission !== 'write') {
+        editorWorkspaceEl.className = 'editor-body preview-mode';
+        setActiveModeBtn(btnModePreview);
+        if (markdownToolbarEl) markdownToolbarEl.style.display = 'none';
+      }
     }
 
     // Cambiar a vista de editor si estábamos en grafo
@@ -6774,11 +8099,11 @@ function setupShareModalEventListeners() {
   btnCloseFooter?.addEventListener('click', closeShareModal);
 
   modal.addEventListener('click', (e) => {
-    if (e.target === modal) closeShareModal();
+    if (e.target === modal && ModalStackManager.isTopModal(modal)) closeShareModal();
   });
 
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && modal.classList.contains('active')) {
+    if (e.key === 'Escape' && modal.classList.contains('active') && ModalStackManager.isTopModal(modal)) {
       closeShareModal();
     }
   });
@@ -7209,6 +8534,7 @@ function setupShareModalEventListeners() {
 let wsClient = null;
 let wsReconnectTimeout = null;
 let wsReconnectAttempts = 0;
+let wsPingInterval = null;
 
 function playNotificationChime() {
   try {
@@ -7327,6 +8653,17 @@ function initWebSocketManager() {
     wsClient.onopen = () => {
       wsReconnectAttempts = 0;
       updateRealtimeStatus(true);
+
+      // Heartbeat periódico (Ping cada 25 segundos para mantener activo el socket a través de proxies/NAT)
+      clearInterval(wsPingInterval);
+      wsPingInterval = setInterval(() => {
+        if (wsClient && wsClient.readyState === WebSocket.OPEN) {
+          try {
+            wsClient.send(JSON.stringify({ type: 'PING' }));
+          } catch {}
+        }
+      }, 25000);
+
       // Solicitar permiso de notificaciones de escritorio si aún no se ha decidido
       if ('Notification' in window && Notification.permission === 'default') {
         requestDesktopNotificationPermission(false);
@@ -7371,6 +8708,7 @@ function initWebSocketManager() {
     };
 
     wsClient.onclose = (e) => {
+      clearInterval(wsPingInterval);
       updateRealtimeStatus(false);
       // Código 4001: no autenticado
       if (e.code === 4001) return;
@@ -7404,6 +8742,53 @@ function handleRealtimeEvent(msg) {
         state.onlineUsers.delete(uid);
       }
       updateAllPresenceIndicators();
+
+      // Si tenemos abierta la conversación con este amigo, actualizar texto de estado en la cabecera
+      if (activeChatFriend && Number(activeChatFriend.id) === uid) {
+        const statusEl = document.getElementById('conv-friend-status');
+        if (statusEl && !statusEl.classList.contains('typing')) {
+          statusEl.textContent = online ? 'En línea' : 'Desconectado';
+        }
+      }
+      break;
+    }
+
+    case 'USER_TYPING': {
+      const { userId, isTyping } = msg.data;
+      if (activeChatFriend && Number(activeChatFriend.id) === Number(userId)) {
+        updateChatTypingUI(Boolean(isTyping));
+      }
+      break;
+    }
+
+    case 'MESSAGES_READ': {
+      const { readerId } = msg.data;
+      if (activeChatFriend && Number(activeChatFriend.id) === Number(readerId)) {
+        document.querySelectorAll('.chat-msg-row.mine .chat-msg-status').forEach(el => {
+          el.className = 'chat-msg-status read';
+          el.textContent = '✓✓';
+          el.title = 'Leído';
+        });
+      }
+      break;
+    }
+
+    case 'UNREAD_COUNT_RESET': {
+      const { friendId } = msg.data;
+      if (friendId) {
+        delete chatUnreadCounts[friendId];
+        updateUnreadBadges();
+        renderFriendsList();
+      }
+      break;
+    }
+
+    case 'CHAT_MESSAGE_SENT': {
+      const { message, recipientId } = msg.data;
+      // Sincronización multidispositivo/multipestaña: si la conversación activa corresponde a este amigo
+      if (activeChatFriend && Number(activeChatFriend.id) === Number(recipientId)) {
+        appendMessageToChat(message, true);
+      }
       break;
     }
 
@@ -7472,19 +8857,44 @@ function handleRealtimeEvent(msg) {
     }
 
     case 'NOTE_UPDATED': {
-      const { title, user } = msg.data;
-      showToast(`📝 @${user.username} guardó cambios en "${title}"`, 'info', 3500);
+      const { title, path: notePath, user } = msg.data;
+      const isSelf = user && user.id === state.currentUser?.id;
+      if (!isSelf) {
+        showToast(`📝 @${user.username} guardó cambios en "${title}"`, 'info', 4000);
 
-      if (document.hidden || !document.hasFocus()) {
-        showDesktopNotification({
-          title: 'Kortexa — Nota Actualizada',
-          body: `@${user.username} guardó cambios en "${title}"`
-        });
+        if (document.hidden || !document.hasFocus()) {
+          showDesktopNotification({
+            title: 'Kortexa — Nota Actualizada',
+            body: `@${user.username} guardó cambios en "${title}"`
+          });
+        }
+
+        // Si tenemos abierta esa misma nota, advertir de la actualización colaborativa
+        if (state.activeNote && (state.activeNote.title === title || state.activeNote.filename === notePath || state.activeNote.filename.endsWith('/' + title + '.md'))) {
+          setSaveStatus(`Actualizado por @${user.username}`);
+          showToast(`⚠️ @${user.username} actualizó esta nota. Vuelve a hacer clic sobre ella en la lista si deseas recargar la versión guardada.`, 'warning', 7000);
+        }
+
+        loadNotesList();
       }
+      break;
+    }
 
-      // Si tenemos abierta esa misma nota, actualizar estado
-      if (state.activeNote && (state.activeNote.title === title || state.activeNote.filename.endsWith(title + '.md'))) {
-        setSaveStatus('Actualizado por colaborador');
+    case 'NOTE_DELETED': {
+      const { path: notePath, user } = msg.data;
+      if (user && user.id !== state.currentUser?.id) {
+        showToast(`🗑️ @${user.username} eliminó "${notePath}"`, 'info', 3500);
+        loadNotesList();
+      }
+      break;
+    }
+
+    case 'SHARED_FOLDER_MUTATED': {
+      const { user } = msg.data;
+      if (user && user.id !== state.currentUser?.id) {
+        loadNotesList();
+        loadFolders();
+        loadSharedWithMe();
       }
       break;
     }
@@ -7718,12 +9128,45 @@ function setupChatWidgetEventListeners() {
     }
   });
 
+  // Control de estado de escritura en tiempo real ("Escribiendo...")
+  let lastTypingSent = 0;
+  let typingStopTimer = null;
+
+  function notifyTypingState(isTyping) {
+    if (!activeChatFriend || !wsClient || wsClient.readyState !== WebSocket.OPEN) return;
+    try {
+      wsClient.send(JSON.stringify({
+        type: 'TYPING',
+        data: {
+          friendId: activeChatFriend.id,
+          isTyping: Boolean(isTyping)
+        }
+      }));
+    } catch {}
+  }
+
+  chatInput?.addEventListener('input', () => {
+    if (!activeChatFriend) return;
+    const now = Date.now();
+    if (now - lastTypingSent > 1500) {
+      notifyTypingState(true);
+      lastTypingSent = now;
+    }
+    clearTimeout(typingStopTimer);
+    typingStopTimer = setTimeout(() => {
+      notifyTypingState(false);
+    }, 2500);
+  });
+
   // Enviar mensaje
   chatForm?.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!chatInput) return;
     const text = chatInput.value.trim();
     if (!text || !activeChatFriend) return;
+
+    clearTimeout(typingStopTimer);
+    notifyTypingState(false);
 
     chatInput.value = '';
     await sendChatMessage(text);
@@ -7968,7 +9411,40 @@ async function openConversationWith(friendUser) {
   }
 }
 
+function updateChatTypingUI(isTyping) {
+  const statusEl = document.getElementById('conv-friend-status');
+  const container = document.getElementById('chat-messages-container');
+
+  if (isTyping) {
+    if (statusEl) {
+      statusEl.textContent = '✍️ escribiendo...';
+      statusEl.classList.add('typing');
+    }
+    if (container && !container.querySelector('#chat-typing-indicator-row')) {
+      const typingRow = document.createElement('div');
+      typingRow.id = 'chat-typing-indicator-row';
+      typingRow.className = 'chat-typing-row';
+      typingRow.innerHTML = `
+        <div class="chat-typing-bubble" title="${escapeHtml(activeChatFriend?.username || 'Amigo')} está escribiendo...">
+          <span></span><span></span><span></span>
+        </div>
+      `;
+      container.appendChild(typingRow);
+      container.scrollTop = container.scrollHeight;
+    }
+  } else {
+    if (statusEl && activeChatFriend) {
+      const isOnline = isUserOnline(activeChatFriend.id);
+      statusEl.textContent = isOnline ? 'En línea' : 'Desconectado';
+      statusEl.classList.remove('typing');
+    }
+    const typingRow = document.getElementById('chat-typing-indicator-row');
+    if (typingRow) typingRow.remove();
+  }
+}
+
 function closeConversation() {
+  updateChatTypingUI(false);
   activeChatFriend = null;
   toggleChatEmojiPicker(false);
   const viewFriends = document.getElementById('chat-view-friends');
@@ -8002,10 +9478,16 @@ function appendMessageToChat(msg, autoScroll = true) {
   const container = document.getElementById('chat-messages-container');
   if (!container) return;
 
+  // Evitar duplicados si el mensaje ya fue insertado
+  if (msg.id && container.querySelector(`[data-msg-id="${msg.id}"]`)) {
+    return;
+  }
+
   const isMine = msg.sender_id === (state.currentUser?.id || 0);
 
   const row = document.createElement('div');
   row.className = `chat-msg-row ${isMine ? 'mine' : 'theirs'}`;
+  if (msg.id) row.dataset.msgId = msg.id;
 
   let timeStr = '';
   if (msg.created_at) {
@@ -8013,12 +9495,27 @@ function appendMessageToChat(msg, autoScroll = true) {
     timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
+  const isRead = Boolean(msg.is_read);
+  const statusHtml = isMine
+    ? `<span class="chat-msg-status ${isRead ? 'read' : 'sent'}" title="${isRead ? 'Leído' : 'Enviado'}">${isRead ? '✓✓' : '✓'}</span>`
+    : '';
+
   row.innerHTML = `
     <div class="chat-bubble ${isMine ? 'mine' : 'theirs'}">${escapeHtml(msg.content)}</div>
-    <span class="chat-msg-time">${timeStr}</span>
+    <div class="chat-msg-footer">
+      <span class="chat-msg-time">${timeStr}</span>
+      ${statusHtml}
+    </div>
   `;
 
-  container.appendChild(row);
+  // Si existe la fila de "escribiendo...", insertar el nuevo mensaje antes de él
+  const typingRow = container.querySelector('#chat-typing-indicator-row');
+  if (typingRow) {
+    container.insertBefore(row, typingRow);
+  } else {
+    container.appendChild(row);
+  }
+
   if (autoScroll) {
     container.scrollTop = container.scrollHeight;
   }
@@ -8426,6 +9923,17 @@ function toggleEditorEmojiPopover(forceState = null) {
   popover.style.display = willShow ? 'flex' : 'none';
 
   if (willShow) {
+    const btn = document.getElementById('btn-toolbar-emoji');
+    if (btn) {
+      const rect = btn.getBoundingClientRect();
+      const popoverWidth = 290;
+      let left = rect.left;
+      if (left + popoverWidth > window.innerWidth - 10) {
+        left = window.innerWidth - popoverWidth - 10;
+      }
+      popover.style.top = `${rect.bottom + 6}px`;
+      popover.style.left = `${Math.max(10, left)}px`;
+    }
     const searchInput = document.getElementById('editor-emoji-search');
     if (searchInput) searchInput.value = '';
     renderEditorEmojiGrid();

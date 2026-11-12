@@ -1,10 +1,30 @@
 import { WebSocketServer, WebSocket } from 'ws';
-import { validateSession } from './auth-db.js';
+import { validateSession, getPresenceSubscriberIds } from './auth-db.js';
 
 // Mapa de conexiones activas por usuario: userId -> Set<WebSocket>
 const userSockets = new Map();
+// Mapa de desconexiones diferidas (grace period de 3.5s anti-flapping para F5 o hipos de red): userId -> Timeout
+const disconnectTimeouts = new Map();
 
 let wss = null;
+
+/**
+ * Notifica un cambio de estado de presencia únicamente a contactos relevantes
+ * (amigos mutuos confirmados y colaboradores de recursos compartidos)
+ */
+function notifyPresenceChange(userId, username, online) {
+  try {
+    const subscriberIds = getPresenceSubscriberIds(userId);
+    if (!subscriberIds || subscriberIds.length === 0) return;
+    sendToUsers(subscriberIds, 'USER_STATUS_CHANGED', {
+      userId,
+      username,
+      online
+    });
+  } catch (err) {
+    console.error('Error notificando cambio de presencia:', err);
+  }
+}
 
 function parseCookies(cookieHeader) {
   const list = {};
@@ -61,30 +81,37 @@ export function initWebSocketServer(httpServer) {
     ws.username = user.username;
     ws.isAlive = true;
 
-    const wasOffline = !userSockets.has(user.id) || userSockets.get(user.id).size === 0;
+    // Si había un temporizador de desconexión pendiente (por F5 o microcorte), cancelarlo
+    const hadPendingDisconnect = disconnectTimeouts.has(user.id);
+    if (hadPendingDisconnect) {
+      clearTimeout(disconnectTimeouts.get(user.id));
+      disconnectTimeouts.delete(user.id);
+    }
+
+    const wasOffline = !hadPendingDisconnect && (!userSockets.has(user.id) || userSockets.get(user.id).size === 0);
 
     if (!userSockets.has(user.id)) {
       userSockets.set(user.id, new Set());
     }
     userSockets.get(user.id).add(ws);
 
-    // Si el usuario acaba de pasar a estar en línea, notificar a los demás usuarios
+    // Si el usuario realmente pasa a estar en línea, notificar a sus amigos y contactos
     if (wasOffline) {
-      broadcast('USER_STATUS_CHANGED', {
-        userId: user.id,
-        username: user.username,
-        online: true
-      });
+      notifyPresenceChange(user.id, user.username, true);
     }
 
-    // Enviar mensaje de bienvenida con la lista de usuarios en línea actualmente
+    // Filtrar usuarios en línea: solo enviar contactos/amigos relevantes al usuario para preservar privacidad
+    const relevantContacts = getPresenceSubscriberIds(user.id);
+    const onlineContacts = relevantContacts.filter(uid => isUserOnline(uid));
+
+    // Enviar mensaje de bienvenida con la lista de contactos en línea
     safeSend(ws, {
       type: 'CONNECTED',
       data: {
         userId: user.id,
         username: user.username,
         message: 'Conectado al canal en tiempo real de Kortexa',
-        onlineUserIds: getOnlineUserIds()
+        onlineUserIds: onlineContacts
       }
     });
 
@@ -93,29 +120,36 @@ export function initWebSocketServer(httpServer) {
       ws.isAlive = true;
     });
 
-    // Escuchar mensajes entrantes (ping del cliente, etc.)
+    // Escuchar mensajes entrantes (ping del cliente, indicador de escritura, etc.)
     ws.on('message', (raw) => {
       try {
         const msg = JSON.parse(raw.toString());
         if (msg.type === 'PING') {
           safeSend(ws, { type: 'PONG', timestamp: Date.now() });
+        } else if (msg.type === 'TYPING' && msg.data && msg.data.friendId) {
+          const targetFriendId = parseInt(msg.data.friendId, 10);
+          sendToUser(targetFriendId, 'USER_TYPING', {
+            userId: ws.userId,
+            username: ws.username,
+            isTyping: Boolean(msg.data.isTyping)
+          });
         }
       } catch {}
     });
 
-    // Limpieza al desconectar
+    // Limpieza al desconectar con grace period anti-flapping (3500ms)
     ws.on('close', () => {
       const set = userSockets.get(user.id);
       if (set) {
         set.delete(ws);
         if (set.size === 0) {
-          userSockets.delete(user.id);
-          // Notificar que el usuario pasó a estar desconectado
-          broadcast('USER_STATUS_CHANGED', {
-            userId: user.id,
-            username: user.username,
-            online: false
-          });
+          // Iniciar periodo de gracia para evitar parpadeos si el usuario recarga la página
+          const timer = setTimeout(() => {
+            disconnectTimeouts.delete(user.id);
+            userSockets.delete(user.id);
+            notifyPresenceChange(user.id, user.username, false);
+          }, 3500);
+          disconnectTimeouts.set(user.id, timer);
         }
       }
     });
@@ -217,12 +251,12 @@ export function broadcast(eventType, data = {}) {
 }
 
 /**
- * Consulta si un usuario está en línea
+ * Consulta si un usuario está en línea (incluye grace period en reconexiones breves)
  */
 export function isUserOnline(userId) {
   const targetId = parseInt(userId, 10);
   const set = userSockets.get(targetId);
-  return Boolean(set && set.size > 0);
+  return Boolean((set && set.size > 0) || disconnectTimeouts.has(targetId));
 }
 
 /**
