@@ -586,14 +586,23 @@ function sendBufferWithRange(req, res, buffer, contentType, filename) {
   const total = buffer.length;
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Content-Type', contentType);
-  if (filename) {
+  res.removeHeader('ETag');
+
+  // CRÍTICO: No enviar Content-Disposition (ni inline) en flujos de video/audio HTML5,
+  // ya que Firefox, Safari y navegadores basados en Gecko/WebKit rechazan la reproducción de video
+  // cuando detectan Content-Disposition, arrojando el error "No se encontró ningún video con formato y tipo MIME compatibles".
+  // Solo se envía como attachment si el cliente solicita explícitamente la descarga (?download=1)
+  const isMediaStream = contentType.startsWith('video/') || contentType.startsWith('audio/');
+  if (req.query.download === '1' || req.query.download === 'true') {
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename || 'download')}"`);
+  } else if (!isMediaStream && filename) {
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(filename)}"`);
   }
 
   const range = req.headers.range;
   if (!range) {
     res.setHeader('Content-Length', total);
-    return res.status(200).send(buffer);
+    return res.status(200).end(buffer);
   }
 
   const match = range.match(/^bytes=(\d*)-(\d*)$/);
@@ -628,12 +637,39 @@ function sendBufferWithRange(req, res, buffer, contentType, filename) {
   res.status(206);
   res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`);
   res.setHeader('Content-Length', chunkSize);
-  res.send(chunk);
+  res.end(chunk);
 }
 
 // ==========================================
 // FUNCIONES AUXILIARES RECURSIVAS
 // ==========================================
+
+// Buscar un archivo por nombre o subruta de forma recursiva dentro de un directorio seguro
+function findVaultFileRecursively(dir, targetName, rootDir) {
+  if (!dir || !fsSync.existsSync(dir)) return null;
+  const cleanTarget = path.basename(targetName).toLowerCase();
+  try {
+    const entries = fsSync.readdirSync(dir, { withFileTypes: true });
+    // 1. Prioridad: coincidencia exacta en el directorio actual
+    for (const entry of entries) {
+      if (entry.isFile() && !entry.name.startsWith('.')) {
+        if (entry.name.toLowerCase() === cleanTarget) {
+          const found = path.join(dir, entry.name);
+          if (found.startsWith(rootDir)) return found;
+        }
+      }
+    }
+    // 2. Búsqueda recursiva en subdirectorios
+    for (const entry of entries) {
+      if (entry.isDirectory() && !entry.name.startsWith('.')) {
+        const subDir = path.join(dir, entry.name);
+        const found = findVaultFileRecursively(subDir, cleanTarget, rootDir);
+        if (found && found.startsWith(rootDir)) return found;
+      }
+    }
+  } catch {}
+  return null;
+}
 
 // Escanear todos los archivos de un vault recursivamente (notas y archivos multimedia)
 async function getAllVaultFiles(dir, base = dir) {
@@ -2835,7 +2871,11 @@ app.get('/api/public/share/:token', async (req, res) => {
 
       // Si se pide un archivo específico dentro de la carpeta/bóveda
       const subSafe = path.normalize(requestedFile).replace(/^(\.\.[\/\\])+/, '');
-      const targetFilePath = path.join(basePath, subSafe);
+      let targetFilePath = path.join(basePath, subSafe);
+      if (!fsSync.existsSync(targetFilePath)) {
+        const fallback = findVaultFileRecursively(basePath, subSafe, basePath);
+        if (fallback) targetFilePath = fallback;
+      }
       if (!targetFilePath.startsWith(basePath) || !fsSync.existsSync(targetFilePath)) {
         return res.status(404).json({ error: 'El archivo solicitado no existe.' });
       }
@@ -2979,6 +3019,10 @@ app.get('/s/:token/raw', async (req, res) => {
       const subSafe = path.normalize(requestedFile).replace(/^(\.\.[\/\\])+/, '');
       if (share.resource_type === 'folder' || share.resource_type === 'vault') {
         targetFile = path.join(basePath, subSafe);
+        if (!fsSync.existsSync(targetFile)) {
+          const fallback = findVaultFileRecursively(basePath, subSafe, basePath);
+          if (fallback) targetFile = fallback;
+        }
         if (!targetFile.startsWith(basePath)) return res.status(403).send('Acceso no autorizado');
       } else {
         // En notas/archivos individuales que incrustan otros archivos (ej: ![[video.mp4]] o ![[subcarpeta/audio.weba]])
@@ -2991,7 +3035,13 @@ app.get('/s/:token/raw', async (req, res) => {
         } else if (fsSync.existsSync(relativeToRoot) && relativeToRoot.startsWith(vaultRoot)) {
           targetFile = relativeToRoot;
         } else {
-          targetFile = relativeToRoot;
+          // Búsqueda recursiva en la bóveda completa del propietario para adjuntos en subcarpetas (estilo Obsidian)
+          const recursiveFound = findVaultFileRecursively(vaultRoot, subSafe, vaultRoot);
+          if (recursiveFound && recursiveFound.startsWith(vaultRoot)) {
+            targetFile = recursiveFound;
+          } else {
+            targetFile = relativeToRoot;
+          }
         }
         if (!targetFile.startsWith(vaultRoot)) return res.status(403).send('Acceso no autorizado');
       }

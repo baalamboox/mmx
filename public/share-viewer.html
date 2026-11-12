@@ -16,6 +16,11 @@
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script type="module" src="/fortunesheet-adapter.js?v=20261109gridlines"></script>
+  <!-- PrismJS para Resaltado de Sintaxis en Código -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
 
   <style>
     :root {
@@ -550,57 +555,120 @@
       min-width: 440px;
     }
 
-    /* Hojas de cálculo Excel Kortexa (FortuneSheet fallback) */
+    /* Hojas de cálculo Excel Kortexa (FortuneSheet & Rejilla de Coordenadas) */
     .fortunesheet-embedded-wrapper {
-      margin: 1.5rem 0;
+      margin: 1.8rem 0;
       border: 1px solid var(--border-subtle);
       border-radius: 10px;
       overflow: hidden;
       background: var(--bg-surface);
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
     }
     .fortunesheet-embedded-header {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 10px 14px;
+      justify-content: space-between;
+      padding: 9px 14px;
       background: var(--bg-elevated);
       border-bottom: 1px solid var(--border-subtle);
       font-size: 13px;
       font-weight: 600;
     }
+    .fortunesheet-title-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
     .fortunesheet-badge {
       font-size: 10px;
       font-weight: 800;
-      padding: 2px 7px;
+      padding: 2.5px 7px;
       border-radius: 4px;
-      background: #10b981;
+      background: #107c41;
       color: #fff;
-      letter-spacing: 0.5px;
+      letter-spacing: 0.6px;
+      box-shadow: 0 2px 6px rgba(16, 124, 65, 0.3);
     }
     .fortunesheet-embedded-title {
-      font-size: 12.5px;
+      font-size: 13px;
       font-weight: 600;
       color: var(--text-main);
     }
+    .fortunesheet-embedded-workbook {
+      width: 100%;
+      height: 380px;
+      min-height: 280px;
+      position: relative;
+      background: var(--bg-surface);
+    }
+    /* Tabla Excel con Coordenadas Clásicas (Letras A-Z y Números 1-N) */
     .spreadsheet-table {
       width: 100%;
       border-collapse: collapse;
       font-size: 12.5px;
       font-family: var(--font-sans);
+      background: var(--bg-card);
     }
     .spreadsheet-table th, .spreadsheet-table td {
       border: 1px solid var(--border-subtle);
-      padding: 8px 12px;
+      padding: 6px 12px;
       text-align: left;
+      min-width: 65px;
+      height: 28px;
+      box-sizing: border-box;
     }
-    .spreadsheet-table th {
+    .spreadsheet-table .excel-corner-header {
+      width: 44px;
+      min-width: 44px;
+      max-width: 44px;
+      background: rgba(255, 255, 255, 0.05);
+      border-right: 1px solid var(--border-subtle);
+      border-bottom: 1px solid var(--border-subtle);
+      text-align: center;
+    }
+    .spreadsheet-table .excel-col-header {
       background: rgba(255, 255, 255, 0.04);
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
       font-weight: 600;
-      color: var(--text-main);
+      text-align: center;
+      user-select: none;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--border-subtle);
     }
-    [data-theme="light"] .spreadsheet-table th {
-      background: rgba(0, 0, 0, 0.03);
+    .spreadsheet-table .excel-row-header {
+      width: 44px;
+      min-width: 44px;
+      max-width: 44px;
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 600;
+      text-align: center;
+      user-select: none;
+      border-right: 1px solid var(--border-subtle);
+    }
+    .spreadsheet-table td {
+      color: var(--text-main);
+      background: transparent;
+    }
+    .spreadsheet-table tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+    [data-theme="light"] .spreadsheet-table .excel-corner-header,
+    [data-theme="light"] .spreadsheet-table .excel-col-header,
+    [data-theme="light"] .spreadsheet-table .excel-row-header {
+      background: #f1f5f9;
+      color: #64748b;
+    }
+    [data-theme="light"] .spreadsheet-table th,
+    [data-theme="light"] .spreadsheet-table td {
+      border-color: #e2e8f0;
+    }
+    [data-theme="light"] .spreadsheet-table tr:hover td {
+      background: rgba(0, 0, 0, 0.02);
     }
 
     /* Chips de Wikilinks y Tarjetas de Notas Incrustadas */
@@ -629,8 +697,153 @@
       border-radius: 8px;
       background: rgba(99, 102, 241, 0.06);
       border: 1px solid rgba(99, 102, 241, 0.2);
-      display: inline-flex;
+      display: flex;
       align-items: center;
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    .embedded-media-block {
+      width: 100%;
+      box-sizing: border-box;
+      margin: 16px 0;
+    }
+    .embedded-media-video {
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
+      border-radius: 8px;
+      background: #000;
+    }
+    .embedded-audio-block {
+      width: 100%;
+      box-sizing: border-box;
+      margin: 14px 0;
+      background: rgba(255, 255, 255, 0.03);
+      padding: 12px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .embedded-media-audio {
+      width: 100%;
+      display: block;
+    }
+    .embedded-caption {
+      display: block;
+      font-size: 11.5px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
+
+    /* Listas de verificación / Tareas (Checklists) */
+    .contains-task-list {
+      list-style: none !important;
+      padding-left: 0 !important;
+      margin-left: 0 !important;
+    }
+    .task-list-item {
+      list-style-type: none !important;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin: 6px 0;
+      line-height: 1.5;
+      transition: color 0.15s ease, opacity 0.15s ease;
+    }
+    .task-list-item-checkbox {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 17px;
+      height: 17px;
+      min-width: 17px;
+      border: 1.6px solid var(--border-subtle);
+      border-radius: 4px;
+      background: var(--bg-surface);
+      cursor: default;
+      pointer-events: none;
+      margin-top: 3.5px;
+      display: inline-grid;
+      place-content: center;
+      outline: none;
+      box-sizing: border-box;
+    }
+    .task-list-item-checkbox:checked {
+      background: #6366f1;
+      border-color: #6366f1;
+    }
+    .task-list-item-checkbox:checked::before {
+      content: "";
+      width: 9px;
+      height: 5px;
+      border-left: 2px solid #ffffff;
+      border-bottom: 2px solid #ffffff;
+      transform: rotate(-45deg) translate(1px, -1px);
+    }
+    .task-list-item.task-completed {
+      color: var(--text-muted);
+      text-decoration: line-through;
+      opacity: 0.65;
+    }
+    [data-theme="light"] .task-list-item-checkbox {
+      background: #ffffff;
+      border-color: #cbd5e1;
+    }
+    [data-theme="light"] .task-list-item-checkbox:checked {
+      background: #6366f1;
+      border-color: #6366f1;
+    }
+
+    /* Sistema de Alertas / Toast */
+    .toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      pointer-events: none;
+      max-width: 420px;
+      width: calc(100vw - 32px);
+    }
+    .toast-item {
+      pointer-events: auto;
+      background: rgba(14, 21, 38, 0.96);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 13px;
+      color: #f8fafc;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+      transform: translateY(12px);
+      opacity: 0;
+      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .toast-item.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+    .toast-item.warning {
+      border-left: 3.5px solid #f59e0b;
+    }
+    .toast-item.info {
+      border-left: 3.5px solid #6366f1;
+    }
+    [data-theme="light"] .toast-item {
+      background: rgba(255, 255, 255, 0.98);
+      color: #0f172a;
+      border-color: rgba(0, 0, 0, 0.12);
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
     }
 
     /* Modal / Formulario de Contraseña */
@@ -969,7 +1182,43 @@
     Compartido de forma segura mediante <strong>Kortexa</strong> — Tu segundo cerebro & red sináptica de conocimiento.
   </footer>
 
+  <!-- CONTENEDOR DE ALERTAS / TOASTS -->
+  <div class="toast-container" id="toast-container"></div>
+
   <script>
+    // Sistema de Alertas Toast
+    function showToast(message, type = 'info', duration = 4000) {
+      let container = document.getElementById('toast-container');
+      if (!container) {
+        container = document.createElement('div');
+        container.className = 'toast-container';
+        container.id = 'toast-container';
+        document.body.appendChild(container);
+      }
+      const toast = document.createElement('div');
+      toast.className = `toast-item ${type}`;
+
+      const iconMap = {
+        warning: '⚠️',
+        danger: '✕',
+        success: '✓',
+        info: 'ℹ️'
+      };
+
+      toast.innerHTML = `
+        <span style="font-size: 15px; flex-shrink: 0;">${iconMap[type] || 'ℹ️'}</span>
+        <span style="line-height: 1.4;">${message}</span>
+      `;
+
+      container.appendChild(toast);
+      requestAnimationFrame(() => toast.classList.add('show'));
+
+      setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 260);
+      }, duration);
+    }
+
     // Gestión de tema
     const btnTheme = document.getElementById('btn-theme-toggle');
     const themeIcon = document.getElementById('theme-icon');
@@ -1282,13 +1531,15 @@
           mediaUrl = getAuthorizedMediaUrl(mediaUrl);
 
           if (imgExts.includes(ext)) {
-            return `<div class="embedded-media-block" style="text-align: center; margin: 16px 0;"><img src="${mediaUrl}" alt="${escapeHtml(target)}" style="${widthStyle || 'max-width: 100%; border-radius: 8px;'}" class="embedded-media-img" loading="lazy" /></div>`;
+            return `<div class="embedded-media-block" style="text-align: center; margin: 16px 0; width: 100%;"><img src="${mediaUrl}" alt="${escapeHtml(target)}" style="${widthStyle || 'max-width: 100%; border-radius: 8px;'}" class="embedded-media-img" loading="lazy" /></div>`;
           } else if (vidExts.includes(ext)) {
-            return `<div class="embedded-media-block" style="margin: 16px 0; max-width: 800px; margin-left: auto; margin-right: auto;"><video controls preload="metadata" playsinline src="${mediaUrl}" style="${widthStyle || 'width: 100%; border-radius: 8px; background: #000;'}" class="embedded-media-video"><p>Tu navegador no puede reproducir este video.</p></video></div>`;
+            const mimeType = ext === '.mp4' ? 'video/mp4' : ext === '.webm' ? 'video/webm' : ext === '.ogv' ? 'video/ogg' : ext === '.mov' ? 'video/quicktime' : 'video/mp4';
+            return `<div class="embedded-media-block" style="margin: 16px 0; width: 100%;"><video controls preload="metadata" playsinline style="${widthStyle || 'width: 100%; border-radius: 8px; background: #000;'}" class="embedded-media-video"><source src="${mediaUrl}" type="${mimeType}"><p>Tu navegador no puede reproducir este video.</p></video></div>`;
           } else if (audExts.includes(ext)) {
-            return `<div class="embedded-media-block embedded-audio-block" style="margin: 14px 0; background: rgba(255, 255, 255, 0.03); padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border-subtle); max-width: 600px;"><audio controls preload="metadata" src="${mediaUrl}" style="width: 100%;" class="embedded-media-audio"><p>Tu navegador no puede reproducir este audio.</p></audio><span class="embedded-caption" style="display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 6px;">🎧 ${escapeHtml(target)}</span></div>`;
+            const mimeType = ext === '.mp3' ? 'audio/mpeg' : ext === '.wav' ? 'audio/wav' : ext === '.ogg' ? 'audio/ogg' : ext === '.weba' ? 'audio/webm' : 'audio/mp4';
+            return `<div class="embedded-media-block embedded-audio-block" style="margin: 14px 0; background: rgba(255, 255, 255, 0.03); padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border-subtle); width: 100%; box-sizing: border-box;"><audio controls preload="metadata" style="width: 100%;" class="embedded-media-audio"><source src="${mediaUrl}" type="${mimeType}"><p>Tu navegador no puede reproducir este audio.</p></audio><span class="embedded-caption" title="${escapeHtml(target)}" style="display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;">🎧 ${escapeHtml(target)}</span></div>`;
           } else if (pdfExts.includes(ext)) {
-            return `<div class="embedded-media-block embedded-pdf-block" style="margin: 16px 0;"><iframe src="${mediaUrl}" style="width: 100%; height: 600px; border: 1px solid var(--border-subtle); border-radius: 8px;"></iframe></div>`;
+            return `<div class="embedded-media-block embedded-pdf-block" style="margin: 16px 0; width: 100%;"><iframe src="${mediaUrl}" style="width: 100%; height: 600px; border: 1px solid var(--border-subtle); border-radius: 8px;"></iframe></div>`;
           }
 
           // Si es una nota incrustada o referencia a nota
@@ -1386,9 +1637,63 @@
           processMediaInContainer(mdContainer);
           processTablesInContainer(mdContainer);
           processWikilinksInContainer(mdContainer);
+          processTaskListsInContainer(mdContainer);
 
           // Renderizar Diagramas Mermaid interactivos
           renderMermaidDiagrams(mdContainer);
+
+          // Resaltado de sintaxis con PrismJS (bloques y código en línea)
+          if (window.Prism) {
+            try {
+              if (window.Prism.plugins && window.Prism.plugins.autoloader) {
+                window.Prism.plugins.autoloader.languages_path = 'https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/';
+              }
+              if (typeof window.Prism.highlightAllUnder === 'function') {
+                window.Prism.highlightAllUnder(mdContainer);
+              }
+
+              // Resaltado automático de código en línea con palabras reservadas
+              const inlineCodes = mdContainer.querySelectorAll('code:not(pre code)');
+              inlineCodes.forEach(inlineEl => {
+                if (inlineEl.querySelector('.token') || inlineEl.classList.contains('katex-fallback')) return;
+                const raw = inlineEl.textContent;
+                if (!raw || !raw.trim()) return;
+
+                const prefixMatch = raw.match(/^([a-z0-9_#-]{1,10}):([\s\S]+)$/i);
+                if (prefixMatch) {
+                  const langAlias = prefixMatch[1].toLowerCase();
+                  const codeContent = prefixMatch[2];
+                  const lang = langAlias === 'js' ? 'javascript' : langAlias === 'py' ? 'python' : langAlias === 'ts' ? 'typescript' : langAlias;
+                  const grammar = window.Prism.languages[lang] || window.Prism.languages.javascript || window.Prism.languages.clike;
+                  if (grammar) {
+                    inlineEl.innerHTML = window.Prism.highlight(codeContent, grammar, lang);
+                    inlineEl.classList.add('inline-code-highlighted');
+                    return;
+                  }
+                }
+
+                const hasCodeSignals = /(?:^|\s)(?:const|let|var|function|return|import|export|class|def|if|else|while|for|await|async|select|from|where|insert|update|delete|create|table|true|false|null|undefined|print|new|throw|try|catch|typeof|instanceof|public|private)\b|=>|\(\)|[{};]|\/\/|#include/i.test(raw);
+                if (hasCodeSignals) {
+                  let lang = 'javascript';
+                  let grammar = window.Prism.languages.javascript || window.Prism.languages.clike;
+                  if (/\b(?:def|elif|self|print)\b/.test(raw) && window.Prism.languages.python) {
+                    lang = 'python';
+                    grammar = window.Prism.languages.python;
+                  } else if (/\b(?:SELECT|FROM|WHERE|INSERT|INTO|UPDATE|DELETE|TABLE)\b/i.test(raw) && window.Prism.languages.sql) {
+                    lang = 'sql';
+                    grammar = window.Prism.languages.sql;
+                  }
+                  if (grammar) {
+                    const highlighted = window.Prism.highlight(raw, grammar, lang);
+                    if (highlighted.includes('class="token')) {
+                      inlineEl.innerHTML = highlighted;
+                      inlineEl.classList.add('inline-code-highlighted');
+                    }
+                  }
+                }
+              });
+            } catch (err) {}
+          }
         } else {
           mdContainer.textContent = raw;
         }
@@ -1409,9 +1714,12 @@
         mediaContainer.style.display = 'block';
         if (badgeEl) badgeEl.textContent = 'Video';
         const mediaSrc = getAuthorizedMediaUrl(data.download_url);
+        const ext = (data.ext || (data.filename ? data.filename.substring(data.filename.lastIndexOf('.')) : '') || '.mp4').toLowerCase();
+        const mimeType = ext === '.mp4' ? 'video/mp4' : ext === '.webm' ? 'video/webm' : ext === '.ogv' ? 'video/ogg' : ext === '.mov' ? 'video/quicktime' : 'video/mp4';
         mediaContainer.innerHTML = `
-          <div style="max-width: 900px; margin: 0 auto; background: #000; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.4);">
-            <video controls preload="metadata" playsinline src="${mediaSrc}" style="width: 100%; display: block; max-height: 75vh;">
+          <div style="width: 100%; margin: 0 auto; background: #000; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.4);">
+            <video controls preload="metadata" playsinline style="width: 100%; display: block; max-height: 75vh;">
+              <source src="${mediaSrc}" type="${mimeType}">
               Tu navegador no soporta reproducción de video HTML5.
             </video>
           </div>`;
@@ -1420,13 +1728,16 @@
         mediaContainer.style.display = 'block';
         if (badgeEl) badgeEl.textContent = 'Audio';
         const mediaSrc = getAuthorizedMediaUrl(data.download_url);
+        const ext = (data.ext || (data.filename ? data.filename.substring(data.filename.lastIndexOf('.')) : '') || '.mp3').toLowerCase();
+        const mimeType = ext === '.mp3' ? 'audio/mpeg' : ext === '.wav' ? 'audio/wav' : ext === '.ogg' ? 'audio/ogg' : ext === '.weba' ? 'audio/webm' : 'audio/mp4';
         mediaContainer.innerHTML = `
-          <div style="max-width: 600px; margin: 40px auto; padding: 28px; background: var(--bg-card); border-radius: 14px; border: 1px solid var(--border-subtle); box-shadow: 0 4px 20px rgba(0,0,0,0.2); text-align: center;">
+          <div style="width: 100%; box-sizing: border-box; margin: 24px auto; padding: 28px; background: var(--bg-card); border-radius: 14px; border: 1px solid var(--border-subtle); box-shadow: 0 4px 20px rgba(0,0,0,0.2); text-align: center;">
             <div style="width: 60px; height: 60px; border-radius: 50%; background: rgba(99, 102, 241, 0.15); color: #818cf8; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto;">
               <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
             </div>
             <h3 style="font-size: 16px; margin-bottom: 20px; color: var(--text-main); font-weight: 600;">${escapeHtml(data.title || data.filename || 'Archivo de Audio')}</h3>
-            <audio controls preload="metadata" src="${mediaSrc}" style="width: 100%; outline: none;">
+            <audio controls preload="metadata" style="width: 100%; outline: none;">
+              <source src="${mediaSrc}" type="${mimeType}">
               Tu navegador no soporta reproducción de audio HTML5.
             </audio>
           </div>`;
@@ -1511,7 +1822,18 @@
       });
     }
 
-    // 2. Procesador de Hojas de Cálculo (FortuneSheet / Excel fallback)
+    // Función auxiliar para convertir índices numéricos (0, 1, 2...) a letras de columnas Excel (A, B, C... Z, AA, AB...)
+    function getExcelColumnLetter(index) {
+      let temp = index;
+      let letter = '';
+      while (temp >= 0) {
+        letter = String.fromCharCode((temp % 26) + 65) + letter;
+        temp = Math.floor(temp / 26) - 1;
+      }
+      return letter;
+    }
+
+    // 2. Procesador de Hojas de Cálculo (FortuneSheet / Excel con Coordenadas Clásicas)
     function processSpreadsheetsInContainer(container) {
       const codeBlocks = container.querySelectorAll('pre code');
       codeBlocks.forEach(codeEl => {
@@ -1544,13 +1866,25 @@
           }
 
           if (matrix.length > 0) {
-            let tableHtml = '<div class="table-responsive-wrapper"><table class="spreadsheet-table"><tbody>';
+            // Calcular el número máximo de columnas en toda la hoja
+            const maxCols = matrix.reduce((max, r) => Math.max(max, (r || []).length), 0);
+
+            // 1. Fila de encabezado superior con letras de columnas de Excel (A, B, C, D...)
+            let tableHtml = '<div class="table-responsive-wrapper"><table class="spreadsheet-table"><thead><tr>';
+            tableHtml += '<th class="excel-corner-header" title="Coordenadas de Hoja de Cálculo"></th>';
+            for (let c = 0; c < maxCols; c++) {
+              tableHtml += `<th class="excel-col-header">${getExcelColumnLetter(c)}</th>`;
+            }
+            tableHtml += '</tr></thead><tbody>';
+
+            // 2. Filas de datos con numeración secuencial de filas a la izquierda (1, 2, 3, 4...)
             matrix.forEach((row, rIdx) => {
               tableHtml += '<tr>';
-              (row || []).forEach(cell => {
-                const tag = rIdx === 0 ? 'th' : 'td';
-                tableHtml += `<${tag}>${escapeHtml(String(cell ?? ''))}</${tag}>`;
-              });
+              tableHtml += `<th class="excel-row-header">${rIdx + 1}</th>`;
+              for (let c = 0; c < maxCols; c++) {
+                const cellVal = row && row[c] !== undefined && row[c] !== null ? row[c] : '';
+                tableHtml += `<td>${escapeHtml(String(cellVal))}</td>`;
+              }
               tableHtml += '</tr>';
             });
             tableHtml += '</tbody></table></div>';
@@ -1559,15 +1893,17 @@
             wrapper.className = 'fortunesheet-embedded-wrapper';
             wrapper.innerHTML = `
               <div class="fortunesheet-embedded-header">
-                <span class="fortunesheet-badge">EXCEL</span>
-                <span class="fortunesheet-embedded-title">Hoja de Cálculo Kortexa</span>
+                <div class="fortunesheet-title-group">
+                  <span class="fortunesheet-badge">EXCEL</span>
+                  <span class="fortunesheet-embedded-title">Hoja de Cálculo Kortexa</span>
+                </div>
               </div>
               ${tableHtml}
             `;
             preEl.parentNode.replaceChild(wrapper, preEl);
           }
         } catch (e) {
-          // Si no es JSON legible, mantener el bloque de código
+          // Si no es JSON legible, mantener el bloque de código original
         }
       });
     }
@@ -1601,32 +1937,48 @@
     function processMediaInContainer(container) {
       container.querySelectorAll('img').forEach(img => {
         let src = img.getAttribute('src') || '';
+        let fileParam = '';
+        if (src.includes('?file=')) {
+          const matchParam = src.match(/[?&]file=([^&#]*)/);
+          if (matchParam) fileParam = decodeURIComponent(matchParam[1]);
+        }
+        const effectivePath = (fileParam || src.split('?')[0]).toLowerCase();
         if (src && !src.startsWith('http://') && !src.startsWith('https://') && !src.startsWith('data:') && !src.startsWith('/s/')) {
           const cleanSrc = src.replace(/^\.\//, '');
           src = getAuthorizedMediaUrl(`/s/${token}/raw?file=${encodeURIComponent(cleanSrc)}`);
           img.src = src;
         }
-        const cleanUrlPath = src.split('?')[0].toLowerCase();
-        const isVideo = ['.mp4', '.webm', '.ogv', '.mov', '.mkv'].some(ext => cleanUrlPath.endsWith(ext));
-        const isAudio = ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac', '.weba', '.opus'].some(ext => cleanUrlPath.endsWith(ext));
+
+        const isVideo = ['.mp4', '.webm', '.ogv', '.mov', '.mkv'].some(ext => effectivePath.endsWith(ext));
+        const isAudio = ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac', '.weba', '.opus'].some(ext => effectivePath.endsWith(ext));
 
         if (isVideo) {
+          const ext = (effectivePath.match(/\.[0-9a-z]+$/i) || [''])[0].toLowerCase();
+          const mimeType = ext === '.mp4' ? 'video/mp4' : ext === '.webm' ? 'video/webm' : ext === '.mov' ? 'video/quicktime' : 'video/mp4';
           const video = document.createElement('video');
           video.controls = true;
           video.preload = 'metadata';
           video.playsInline = true;
-          video.src = src;
           video.style.maxWidth = '100%';
           video.style.borderRadius = '8px';
           video.style.margin = '16px 0';
+          const source = document.createElement('source');
+          source.src = src;
+          source.type = mimeType;
+          video.appendChild(source);
           img.parentNode.replaceChild(video, img);
         } else if (isAudio) {
+          const ext = (effectivePath.match(/\.[0-9a-z]+$/i) || [''])[0].toLowerCase();
+          const mimeType = ext === '.mp3' ? 'audio/mpeg' : ext === '.wav' ? 'audio/wav' : ext === '.weba' ? 'audio/webm' : 'audio/mp4';
           const audio = document.createElement('audio');
           audio.controls = true;
           audio.preload = 'metadata';
-          audio.src = src;
           audio.style.width = '100%';
           audio.style.margin = '12px 0';
+          const source = document.createElement('source');
+          source.src = src;
+          source.type = mimeType;
+          audio.appendChild(source);
           img.parentNode.replaceChild(audio, img);
         }
       });
@@ -1643,26 +1995,61 @@
       });
     }
 
-    // 6. Navegación fluida por Wikilinks en colecciones / carpetas compartidas
+    // 6. Navegación fluida por Wikilinks en colecciones y alerta en notas individuales
     function processWikilinksInContainer(container) {
       container.querySelectorAll('.wikilink-badge').forEach(badge => {
         badge.addEventListener('click', (e) => {
-          const target = badge.getAttribute('data-target');
-          if (!target) return;
+          e.preventDefault();
+          const target = badge.getAttribute('data-target') || '';
+          const cleanTarget = target.trim();
+          if (!cleanTarget) return;
+
+          // Caso 1: Colección o carpeta compartida
           if (Array.isArray(collectionFiles) && collectionFiles.length > 0) {
-            const cleanTarget = target.trim().toLowerCase();
+            const lowerTarget = cleanTarget.toLowerCase();
             const found = collectionFiles.find(f => 
-              (f.title && f.title.toLowerCase() === cleanTarget) ||
-              (f.filename && f.filename.toLowerCase() === cleanTarget) ||
-              (f.filename && f.filename.toLowerCase() === `${cleanTarget}.md`) ||
-              (f.name && f.name.toLowerCase() === cleanTarget)
+              (f.title && f.title.toLowerCase() === lowerTarget) ||
+              (f.filename && f.filename.toLowerCase() === lowerTarget) ||
+              (f.filename && f.filename.toLowerCase() === `${lowerTarget}.md`) ||
+              (f.name && f.name.toLowerCase() === lowerTarget)
             );
             if (found) {
-              e.preventDefault();
               selectCollectionFile(found.filename);
+              return;
             }
+            showToast(`No es posible abrir "[[${cleanTarget}]]": esta nota no forma parte de la carpeta compartida.`, 'warning');
+            return;
           }
+
+          // Caso 2: Nota única compartida
+          showToast(`No es posible abrir "[[${cleanTarget}]]": este enlace compartido solo da acceso a la nota actual.`, 'warning');
         });
+      });
+    }
+
+    function processTaskListsInContainer(container) {
+      if (!container) return;
+      const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+      checkboxes.forEach((cb, idx) => {
+        // En la vista compartida pública, las casillas son de solo lectura
+        cb.setAttribute('disabled', 'true');
+        cb.disabled = true;
+        cb.classList.add('task-list-item-checkbox');
+        cb.setAttribute('data-task-index', idx);
+
+        const li = cb.closest('li');
+        if (li) {
+          li.classList.add('task-list-item');
+          if (cb.checked) {
+            li.classList.add('task-completed');
+          } else {
+            li.classList.remove('task-completed');
+          }
+          const ul = li.closest('ul, ol');
+          if (ul) {
+            ul.classList.add('contains-task-list');
+          }
+        }
       });
     }
 

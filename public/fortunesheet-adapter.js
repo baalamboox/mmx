@@ -46,20 +46,40 @@ export async function loadFortuneSheet() {
 export function convertToFortuneSheetData(rawData) {
   // 1. Si ya es una estructura válida de Sheet[]
   if (Array.isArray(rawData) && rawData.length > 0 && typeof rawData[0] === 'object' && !Array.isArray(rawData[0])) {
-    return rawData.map(sheet => ({
-      ...sheet,
-      showGridLines: sheet.showGridLines !== undefined ? sheet.showGridLines : 1
-    }));
+    return rawData.map((sheet, sIdx) => {
+      const copy = { ...sheet };
+      copy.status = copy.status !== undefined ? copy.status : (sIdx === 0 ? 1 : 0);
+      copy.order = copy.order !== undefined ? copy.order : sIdx;
+      copy.showGridLines = copy.showGridLines !== undefined ? copy.showGridLines : 1;
+
+      // Si falta celldata pero tiene data (matriz 2D), construir celldata (requerido por FortuneSheet para renderizar celdas en el montaje)
+      if ((!copy.celldata || !copy.celldata.length) && Array.isArray(copy.data)) {
+        const cd = [];
+        copy.data.forEach((row, r) => {
+          if (Array.isArray(row)) {
+            row.forEach((cell, c) => {
+              if (cell !== null && cell !== undefined && cell !== '') {
+                const cellObj = typeof cell === 'object' ? cell : { v: cell, m: String(cell) };
+                cd.push({ r, c, v: cellObj });
+              }
+            });
+          }
+        });
+        copy.celldata = cd;
+      }
+      return copy;
+    });
   }
 
   // 2. Si es un array 2D: [["A", "B"], [1, 2]]
   const numRows = Array.isArray(rawData) ? rawData.length : 0;
   const numCols = Array.isArray(rawData?.[0]) ? rawData[0].length : 0;
-  const rowCount = Math.max(16, numRows + 6);
-  const colCount = Math.max(10, numCols + 4);
+  const rowCount = Math.max(20, numRows + 10);
+  const colCount = Math.max(12, numCols + 6);
 
-  // Crear matriz 2D limpia para FortuneSheet
+  // Crear matriz 2D limpia y celldata disperso para inicialización completa de FortuneSheet
   const data = Array.from({ length: rowCount }, () => Array.from({ length: colCount }, () => null));
+  const celldata = [];
 
   if (Array.isArray(rawData)) {
     rawData.forEach((row, r) => {
@@ -68,29 +88,34 @@ export function convertToFortuneSheetData(rawData) {
           if (r < rowCount && c < colCount) {
             if (cellVal !== null && cellVal !== undefined && cellVal !== '') {
               const strVal = String(cellVal).trim();
+              let cellObj = null;
+
               // Fórmulas de Excel (empiezan con =)
               if (strVal.startsWith('=')) {
-                data[r][c] = {
+                cellObj = {
                   f: strVal,
                   v: null,
                   m: '',
                   bl: r === 0 ? 1 : 0
                 };
               } else if (!isNaN(cellVal) && typeof cellVal === 'number') {
-                data[r][c] = {
+                cellObj = {
                   v: cellVal,
                   m: String(cellVal),
                   ct: { fa: 'General', t: 'n' },
                   bl: r === 0 ? 1 : 0
                 };
               } else {
-                data[r][c] = {
+                cellObj = {
                   v: strVal,
                   m: strVal,
                   ct: { fa: 'General', t: 's' },
                   bl: r === 0 ? 1 : 0
                 };
               }
+
+              data[r][c] = cellObj;
+              celldata.push({ r, c, v: cellObj });
             }
           }
         });
@@ -102,9 +127,12 @@ export function convertToFortuneSheetData(rawData) {
     {
       name: 'Hoja 1',
       id: 'sheet_01',
+      status: 1,
+      order: 0,
       row: rowCount,
       column: colCount,
       showGridLines: 1,
+      celldata,
       data
     }
   ];
@@ -185,10 +213,12 @@ export async function mountFortuneSheet(containerEl, initialData, options = {}) 
   // Limpiar cualquier contenido previo
   containerEl.innerHTML = '';
   const root = ReactDOM.createRoot(containerEl);
+  const workbookRef = React.createRef ? React.createRef() : null;
 
   let latestData = formattedData;
 
   const props = {
+    ref: workbookRef,
     data: formattedData,
     lang: 'es',
     showToolbar: options.showToolbar !== false,
@@ -204,7 +234,10 @@ export async function mountFortuneSheet(containerEl, initialData, options = {}) 
     },
     onOp: (op) => {
       if (typeof options.onOp === 'function') {
-        options.onOp(op, latestData);
+        const currentData = (workbookRef && workbookRef.current && typeof workbookRef.current.getAllSheets === 'function')
+          ? workbookRef.current.getAllSheets()
+          : latestData;
+        options.onOp(op, currentData);
       }
     }
   };
@@ -213,7 +246,15 @@ export async function mountFortuneSheet(containerEl, initialData, options = {}) 
 
   return {
     root,
-    getData: () => latestData,
+    ref: workbookRef,
+    getData: () => {
+      if (workbookRef && workbookRef.current && typeof workbookRef.current.getAllSheets === 'function') {
+        try {
+          return workbookRef.current.getAllSheets();
+        } catch (e) {}
+      }
+      return latestData;
+    },
     unmount: () => {
       try {
         root.unmount();

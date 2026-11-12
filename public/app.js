@@ -3207,7 +3207,7 @@ function renderMarkdown() {
     } else if (fileType === 'video') {
       return `<div class="embedded-media-block"><video controls src="${fileUrl}" style="${widthStyle}" class="embedded-media-video"></video></div>`;
     } else if (fileType === 'audio') {
-      return `<div class="embedded-media-block embedded-audio-block"><audio controls src="${fileUrl}" class="embedded-media-audio"></audio><span class="embedded-caption">🎧 ${target}</span></div>`;
+      return `<div class="embedded-media-block embedded-audio-block"><audio controls src="${fileUrl}" class="embedded-media-audio"></audio><span class="embedded-caption" title="${escapeHtml(target)}">🎧 ${escapeHtml(target)}</span></div>`;
     } else if (fileType === 'pdf') {
       return `<div class="embedded-media-block embedded-pdf-block"><iframe src="${fileUrl}" class="embedded-media-pdf"></iframe><a href="${fileUrl}" target="_blank" class="pdf-link-out">Abrir ${target} ↗</a></div>`;
     }
@@ -3352,6 +3352,202 @@ function renderMarkdown() {
 
   // 5. Renderizar Diagramas Mermaid (Flujo, ER, Clases, etc.)
   renderMermaidDiagramsInPreview();
+
+  // 6. Procesar Listas de Verificación Interactivas (Checklists / Tareas)
+  processTaskListsInPreview();
+
+  // 7. Botones de copia y resaltado de sintaxis con PrismJS
+  processCodeBlocksInPreview();
+  highlightCodeBlocksInPreview();
+}
+
+// ==========================================
+// RESALTADO DE SINTAXIS Y GESTIÓN DE CÓDIGO (PRISMJS)
+// ==========================================
+function processCodeBlocksInPreview() {
+  if (!markdownPreviewEl) return;
+  const preElements = markdownPreviewEl.querySelectorAll('pre');
+  preElements.forEach(pre => {
+    if (pre.querySelector('.btn-copy-code') || pre.closest('.mermaid-wrapper') || pre.closest('.fortunesheet-embedded-wrapper')) return;
+
+    pre.style.position = 'relative';
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'btn-copy-code';
+    copyBtn.title = 'Copiar código';
+    copyBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copiar</span>`;
+    copyBtn.addEventListener('click', async () => {
+      const codeEl = pre.querySelector('code');
+      const textToCopy = codeEl ? codeEl.innerText : pre.innerText;
+      try {
+        await navigator.clipboard.writeText(textToCopy);
+        copyBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg><span style="color:#10b981;">¡Copiado!</span>`;
+        setTimeout(() => {
+          copyBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copiar</span>`;
+        }, 2000);
+      } catch (err) {
+        console.warn('Error al copiar código:', err);
+      }
+    });
+    pre.appendChild(copyBtn);
+  });
+}
+
+function highlightCodeBlocksInPreview() {
+  if (!markdownPreviewEl) return;
+  if (!window.Prism) return;
+
+  try {
+    if (window.Prism.plugins && window.Prism.plugins.autoloader) {
+      window.Prism.plugins.autoloader.languages_path = 'https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/';
+    }
+    // 1. Resaltar bloques de código <pre><code> estándar
+    if (typeof window.Prism.highlightAllUnder === 'function') {
+      window.Prism.highlightAllUnder(markdownPreviewEl);
+    }
+
+    // 2. Resaltar automáticamente código en línea con palabras reservadas o sintaxis de código
+    const inlineCodes = markdownPreviewEl.querySelectorAll('code:not(pre code)');
+    inlineCodes.forEach(inlineEl => {
+      if (inlineEl.querySelector('.token') || inlineEl.classList.contains('katex-fallback')) return;
+
+      const raw = inlineEl.textContent;
+      if (!raw || !raw.trim()) return;
+
+      // Soporte para prefijo explícito de lenguaje (ej: `js:const x = 1;` o `py:def fn():`)
+      const prefixMatch = raw.match(/^([a-z0-9_#-]{1,10}):([\s\S]+)$/i);
+      if (prefixMatch) {
+        const langAlias = prefixMatch[1].toLowerCase();
+        const codeContent = prefixMatch[2];
+        const lang = langAlias === 'js' ? 'javascript' : langAlias === 'py' ? 'python' : langAlias === 'ts' ? 'typescript' : langAlias;
+        const grammar = window.Prism.languages[lang] || window.Prism.languages.javascript || window.Prism.languages.clike;
+        if (grammar) {
+          inlineEl.innerHTML = window.Prism.highlight(codeContent, grammar, lang);
+          inlineEl.classList.add('inline-code-highlighted');
+          return;
+        }
+      }
+
+      // Detección automática por presencia de palabras reservadas o señales léxicas de programación
+      const hasCodeSignals = /(?:^|\s)(?:const|let|var|function|return|import|export|class|def|if|else|while|for|await|async|select|from|where|insert|update|delete|create|table|true|false|null|undefined|print|new|throw|try|catch|typeof|instanceof|public|private)\b|=>|\(\)|[{};]|\/\/|#include/i.test(raw);
+
+      if (hasCodeSignals) {
+        let lang = 'javascript';
+        let grammar = window.Prism.languages.javascript || window.Prism.languages.clike;
+
+        if (/\b(?:def|elif|self|print)\b/.test(raw) && window.Prism.languages.python) {
+          lang = 'python';
+          grammar = window.Prism.languages.python;
+        } else if (/\b(?:SELECT|FROM|WHERE|INSERT|INTO|UPDATE|DELETE|TABLE)\b/i.test(raw) && window.Prism.languages.sql) {
+          lang = 'sql';
+          grammar = window.Prism.languages.sql;
+        }
+
+        if (grammar) {
+          const highlighted = window.Prism.highlight(raw, grammar, lang);
+          if (highlighted.includes('class="token')) {
+            inlineEl.innerHTML = highlighted;
+            inlineEl.classList.add('inline-code-highlighted');
+          }
+        }
+      }
+    });
+  } catch (e) {
+    console.warn('Error al resaltar sintaxis:', e);
+  }
+}
+
+// ==========================================
+// PROCESAMIENTO DE LISTAS DE VERIFICACIÓN (CHECKLISTS INTERACTIVAS)
+// ==========================================
+function toggleTaskInMarkdown(text, taskIndex, isChecked) {
+  // Dividir por bloques de código para no alterar bloques ```
+  const codeBlockRegex = /```[\s\S]*?```/g;
+  const segments = [];
+  let lastIdx = 0;
+  let match;
+  while ((match = codeBlockRegex.exec(text)) !== null) {
+    segments.push({ isCode: false, text: text.substring(lastIdx, match.index) });
+    segments.push({ isCode: true, text: match[0] });
+    lastIdx = match.index + match[0].length;
+  }
+  segments.push({ isCode: false, text: text.substring(lastIdx) });
+
+  let currentTaskCount = 0;
+  let replaced = false;
+
+  const taskRegex = /^([ \t]*([-*+]|\d+\.)[ \t]+\[)([ xX])(\][ \t]+.*)$/gm;
+
+  for (let i = 0; i < segments.length; i++) {
+    if (segments[i].isCode) continue;
+
+    segments[i].text = segments[i].text.replace(taskRegex, (m, prefix, bullet, checkChar, suffix) => {
+      if (currentTaskCount === taskIndex && !replaced) {
+        replaced = true;
+        currentTaskCount++;
+        return `${prefix}${isChecked ? 'x' : ' '}${suffix}`;
+      }
+      currentTaskCount++;
+      return m;
+    });
+
+    if (replaced) break;
+  }
+
+  return segments.map(s => s.text).join('');
+}
+
+function processTaskListsInPreview() {
+  if (!markdownPreviewEl) return;
+  const checkboxes = markdownPreviewEl.querySelectorAll('input[type="checkbox"]');
+  if (!checkboxes.length) return;
+
+  checkboxes.forEach((cb, idx) => {
+    // 1. Remover atributo disabled impuesto por el parser de Markdown
+    cb.removeAttribute('disabled');
+    cb.disabled = false;
+    cb.classList.add('task-list-item-checkbox');
+    cb.setAttribute('data-task-index', idx);
+
+    // 2. Decorar el li y ul contenedor para eliminar viñetas nativas y alinear
+    const li = cb.closest('li');
+    if (li) {
+      li.classList.add('task-list-item');
+      if (cb.checked) {
+        li.classList.add('task-completed');
+      } else {
+        li.classList.remove('task-completed');
+      }
+
+      const ul = li.closest('ul, ol');
+      if (ul) {
+        ul.classList.add('contains-task-list');
+      }
+    }
+
+    // 3. Escuchador interactivo para alternar estado y persistir en el markdown
+    cb.addEventListener('change', () => {
+      const isChecked = cb.checked;
+      if (li) {
+        if (isChecked) {
+          li.classList.add('task-completed');
+        } else {
+          li.classList.remove('task-completed');
+        }
+      }
+
+      if (markdownInputEl) {
+        const currentVal = markdownInputEl.value;
+        const updatedVal = toggleTaskInMarkdown(currentVal, idx, isChecked);
+        if (currentVal !== updatedVal) {
+          markdownInputEl.value = updatedVal;
+          // Auto-guardado en segundo plano sin re-renderizar para mantener la fluidez
+          scheduleSave(false);
+        }
+      }
+    });
+  });
 }
 
 // ==========================================
@@ -5168,6 +5364,150 @@ function setupMarkdownToolbar() {
 
   // Atajos de teclado en el editor Markdown
   markdownInputEl.addEventListener('keydown', (e) => {
+    // Auto-continuación inteligente de listas (ordenadas, desordenadas, tareas y citas)
+    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const start = markdownInputEl.selectionStart;
+      const end = markdownInputEl.selectionEnd;
+      // Si hay una selección activa de texto, permitir que Enter la elimine de forma estándar
+      if (start !== end) return;
+
+      const val = markdownInputEl.value;
+      const lastNewline = val.lastIndexOf('\n', start - 1);
+      const lineStart = lastNewline === -1 ? 0 : lastNewline + 1;
+      const nextNewline = val.indexOf('\n', start);
+      const lineEnd = nextNewline === -1 ? val.length : nextNewline;
+
+      const lineTextToCursor = val.substring(lineStart, start);
+      const fullLineText = val.substring(lineStart, lineEnd);
+
+      // 1. Checklist / Lista de Tareas: - [ ] o - [x]
+      const taskMatch = lineTextToCursor.match(/^([ \t]*)([-*+]|\d+\.)[ \t]+\[([ xX])\]([ \t]*)(.*)$/);
+      if (taskMatch) {
+        e.preventDefault();
+        const indent = taskMatch[1];
+        const bullet = taskMatch[2];
+        const content = taskMatch[5];
+        const isLineEmpty = !content && fullLineText.trim() === `${bullet} [${taskMatch[3]}]`.trim();
+
+        if (isLineEmpty) {
+          // Salir de la lista de tareas si la línea actual está vacía
+          markdownInputEl.setSelectionRange(lineStart, lineEnd);
+          if (!document.execCommand('delete')) {
+            markdownInputEl.value = val.substring(0, lineStart) + val.substring(lineEnd);
+            markdownInputEl.setSelectionRange(lineStart, lineStart);
+          }
+        } else {
+          // Continuar con un nuevo ítem de tarea desmarcado
+          const insertion = `\n${indent}- [ ] `;
+          if (!document.execCommand('insertText', false, insertion)) {
+            markdownInputEl.value = val.substring(0, start) + insertion + val.substring(end);
+            const newPos = start + insertion.length;
+            markdownInputEl.setSelectionRange(newPos, newPos);
+          }
+        }
+
+        markdownInputEl.dispatchEvent(new Event('input', { bubbles: true }));
+        renderMarkdown();
+        scheduleSave();
+        return;
+      }
+
+      // 2. Lista ordenada: 1. 2. 3.
+      const orderedMatch = lineTextToCursor.match(/^([ \t]*)(\d+)\.([ \t]*)(.*)$/);
+      if (orderedMatch) {
+        e.preventDefault();
+        const indent = orderedMatch[1];
+        const numStr = orderedMatch[2];
+        const num = parseInt(numStr, 10);
+        const content = orderedMatch[4];
+        const isLineEmpty = !content && fullLineText.trim() === `${numStr}.`.trim();
+
+        if (isLineEmpty) {
+          // Salir de la lista ordenada si la línea actual está vacía
+          markdownInputEl.setSelectionRange(lineStart, lineEnd);
+          if (!document.execCommand('delete')) {
+            markdownInputEl.value = val.substring(0, lineStart) + val.substring(lineEnd);
+            markdownInputEl.setSelectionRange(lineStart, lineStart);
+          }
+        } else {
+          // Continuar con el siguiente número consecutivo
+          const insertion = `\n${indent}${num + 1}. `;
+          if (!document.execCommand('insertText', false, insertion)) {
+            markdownInputEl.value = val.substring(0, start) + insertion + val.substring(end);
+            const newPos = start + insertion.length;
+            markdownInputEl.setSelectionRange(newPos, newPos);
+          }
+        }
+
+        markdownInputEl.dispatchEvent(new Event('input', { bubbles: true }));
+        renderMarkdown();
+        scheduleSave();
+        return;
+      }
+
+      // 3. Lista desordenada: - * +
+      const unorderedMatch = lineTextToCursor.match(/^([ \t]*)([-*+])([ \t]*)(.*)$/);
+      if (unorderedMatch) {
+        e.preventDefault();
+        const indent = unorderedMatch[1];
+        const bullet = unorderedMatch[2];
+        const content = unorderedMatch[4];
+        const isLineEmpty = !content && fullLineText.trim() === bullet;
+
+        if (isLineEmpty) {
+          // Salir de la lista con viñetas si la línea actual está vacía
+          markdownInputEl.setSelectionRange(lineStart, lineEnd);
+          if (!document.execCommand('delete')) {
+            markdownInputEl.value = val.substring(0, lineStart) + val.substring(lineEnd);
+            markdownInputEl.setSelectionRange(lineStart, lineStart);
+          }
+        } else {
+          // Continuar con la misma viñeta e indentación
+          const insertion = `\n${indent}${bullet} `;
+          if (!document.execCommand('insertText', false, insertion)) {
+            markdownInputEl.value = val.substring(0, start) + insertion + val.substring(end);
+            const newPos = start + insertion.length;
+            markdownInputEl.setSelectionRange(newPos, newPos);
+          }
+        }
+
+        markdownInputEl.dispatchEvent(new Event('input', { bubbles: true }));
+        renderMarkdown();
+        scheduleSave();
+        return;
+      }
+
+      // 4. Bloque de cita: >
+      const quoteMatch = lineTextToCursor.match(/^([ \t]*>)([ \t]*)(.*)$/);
+      if (quoteMatch) {
+        e.preventDefault();
+        const prefix = quoteMatch[1];
+        const content = quoteMatch[3];
+        const isLineEmpty = !content && fullLineText.trim() === '>';
+
+        if (isLineEmpty) {
+          // Salir de la cita si la línea actual está vacía
+          markdownInputEl.setSelectionRange(lineStart, lineEnd);
+          if (!document.execCommand('delete')) {
+            markdownInputEl.value = val.substring(0, lineStart) + val.substring(lineEnd);
+            markdownInputEl.setSelectionRange(lineStart, lineStart);
+          }
+        } else {
+          const insertion = `\n${prefix} `;
+          if (!document.execCommand('insertText', false, insertion)) {
+            markdownInputEl.value = val.substring(0, start) + insertion + val.substring(end);
+            const newPos = start + insertion.length;
+            markdownInputEl.setSelectionRange(newPos, newPos);
+          }
+        }
+
+        markdownInputEl.dispatchEvent(new Event('input', { bubbles: true }));
+        renderMarkdown();
+        scheduleSave();
+        return;
+      }
+    }
+
     // Expansión de snippets (lorem + Tab) e indentación con Tabulador
     if (e.key === 'Tab') {
       e.preventDefault();
@@ -6314,6 +6654,64 @@ function setupVoiceRecorderEventListeners() {
 // ==========================================
 // 15. INTEGRACIÓN FORTUNESHEET (EXCEL INTERACTIVO)
 // ==========================================
+function getExcelColumnLetter(index) {
+  let letter = '';
+  let temp = index;
+  while (temp >= 0) {
+    letter = String.fromCharCode((temp % 26) + 65) + letter;
+    temp = Math.floor(temp / 26) - 1;
+  }
+  return letter;
+}
+
+function renderSpreadsheetTableHtml(data) {
+  let matrix = [];
+  if (Array.isArray(data) && data[0] && (data[0].celldata || data[0].data)) {
+    const sheet = data[0];
+    if (Array.isArray(sheet.data)) {
+      matrix = sheet.data.map(row => row ? row.map(c => (c && c.v !== undefined ? c.v : (c && c.m !== undefined ? c.m : ''))) : []);
+    } else if (Array.isArray(sheet.celldata)) {
+      const rows = [];
+      sheet.celldata.forEach(cell => {
+        const r = cell.r;
+        const c = cell.c;
+        if (!rows[r]) rows[r] = [];
+        rows[r][c] = cell.v ? (cell.v.v !== undefined ? cell.v.v : (cell.v.m !== undefined ? cell.v.m : cell.v)) : '';
+      });
+      matrix = rows;
+    }
+  } else if (Array.isArray(data)) {
+    matrix = data;
+  }
+
+  if (!matrix.length) matrix = [[""]];
+
+  let maxCols = 0;
+  matrix.forEach(row => {
+    if (Array.isArray(row) && row.length > maxCols) maxCols = row.length;
+  });
+  maxCols = Math.max(maxCols, 4);
+
+  let tableHtml = '<div style="overflow-x: auto; max-height: 380px; width: 100%;"><table class="spreadsheet-table"><thead><tr>';
+  tableHtml += '<th class="excel-corner-header" title="Coordenadas de Hoja de Cálculo"></th>';
+  for (let c = 0; c < maxCols; c++) {
+    tableHtml += `<th class="excel-col-header">${getExcelColumnLetter(c)}</th>`;
+  }
+  tableHtml += '</tr></thead><tbody>';
+
+  matrix.forEach((row, rIdx) => {
+    tableHtml += '<tr>';
+    tableHtml += `<th class="excel-row-header">${rIdx + 1}</th>`;
+    for (let c = 0; c < maxCols; c++) {
+      const cellVal = row && row[c] !== undefined && row[c] !== null ? row[c] : '';
+      tableHtml += `<td>${escapeHtml(String(cellVal))}</td>`;
+    }
+    tableHtml += '</tr>';
+  });
+  tableHtml += '</tbody></table></div>';
+  return tableHtml;
+}
+
 function parseSheetDataFromBlock(rawString) {
   if (!rawString || !rawString.trim()) {
     return [[""]];
@@ -6361,6 +6759,14 @@ function processFortuneSheetsInPreview() {
 
     const currentIdx = sheetIndex++;
     const containerId = `fs-embed-sheet-${currentIdx}-${Date.now()}`;
+    const rawContent = codeEl.textContent.trim();
+
+    // Generar tabla HTML inicial con coordenadas para vista instantánea garantizada al recargar
+    let tableHtml = '';
+    try {
+      const parsedData = parseSheetDataFromBlock(rawContent);
+      tableHtml = renderSpreadsheetTableHtml(parsedData);
+    } catch (e) {}
 
     const wrapper = document.createElement('div');
     wrapper.className = 'fortunesheet-embedded-wrapper';
@@ -6383,7 +6789,9 @@ function processFortuneSheetsInPreview() {
           </button>
         </div>
       </div>
-      <div id="${containerId}" class="fortunesheet-embedded-workbook"></div>
+      <div id="${containerId}" class="fortunesheet-embedded-workbook" data-raw-content="${encodeURIComponent(rawContent)}">
+        ${tableHtml}
+      </div>
     `;
 
     preEl.replaceWith(wrapper);
@@ -6415,16 +6823,20 @@ async function mountAllEmbeddedSheets() {
     const container = wrapper.querySelector('.fortunesheet-embedded-workbook');
     if (!container) return;
 
+    // Obtener contenido directo del contenedor o del bloque del editor
+    const rawAttr = container.getAttribute('data-raw-content');
     const blockData = sheetBlocks[idx];
-    if (!blockData) return;
+    const rawContent = rawAttr ? decodeURIComponent(rawAttr) : (blockData ? blockData.content : '');
+
+    if (!rawContent) return;
 
     // Evitar re-montar si el contenido no ha cambiado
-    if (container.dataset.renderedHash === blockData.content) {
+    if (container.dataset.renderedHash === rawContent) {
       return;
     }
-    container.dataset.renderedHash = blockData.content;
+    container.dataset.renderedHash = rawContent;
 
-    const parsed = parseSheetDataFromBlock(blockData.content);
+    const parsed = parseSheetDataFromBlock(rawContent);
 
     window.KortexaFortuneSheet.mountFortuneSheet(container, parsed, {
       showToolbar: false,
@@ -6434,7 +6846,9 @@ async function mountAllEmbeddedSheets() {
         // Al editar celdas en la vista previa, actualizar el bloque de la nota sin destruir el DOM
         clearTimeout(container._saveTimer);
         container._saveTimer = setTimeout(() => {
-          updateSheetBlockInEditor(idx, latestData, false);
+          const inst = mountedSheetInstances.get(idx);
+          const currentData = (inst && typeof inst.getData === 'function') ? inst.getData() : latestData;
+          updateSheetBlockInEditor(idx, currentData, false);
         }, 600);
       }
     }).then(inst => {
@@ -6462,6 +6876,16 @@ function updateSheetBlockInEditor(targetBlockIndex, newSheetsData, shouldReRende
   const fullText = markdownInputEl.value;
   markdownInputEl.value = fullText.substring(0, targetBlock.start) + replacement + fullText.substring(targetBlock.end);
 
+  // Sincronizar atributos de caché del contenedor para no desmontar el lienzo
+  const wrappers = markdownPreviewEl ? markdownPreviewEl.querySelectorAll('.fortunesheet-embedded-wrapper') : [];
+  if (wrappers[targetBlockIndex]) {
+    const cont = wrappers[targetBlockIndex].querySelector('.fortunesheet-embedded-workbook');
+    if (cont) {
+      cont.dataset.renderedHash = serialized;
+      cont.setAttribute('data-raw-content', encodeURIComponent(serialized));
+    }
+  }
+
   if (shouldReRender) {
     renderMarkdown();
   }
@@ -6475,7 +6899,18 @@ function openFortuneSheetModal(blockIndex) {
 
   const sheetBlocks = extractAllSheetBlocksFromEditor();
   const block = sheetBlocks[blockIndex];
-  const initialData = block ? parseSheetDataFromBlock(block.content) : [
+
+  let rawContent = block ? block.content : '';
+  if (!rawContent && markdownPreviewEl) {
+    const wrappers = markdownPreviewEl.querySelectorAll('.fortunesheet-embedded-wrapper');
+    if (wrappers[blockIndex]) {
+      const cont = wrappers[blockIndex].querySelector('.fortunesheet-embedded-workbook');
+      const attr = cont?.getAttribute('data-raw-content');
+      if (attr) rawContent = decodeURIComponent(attr);
+    }
+  }
+
+  const initialData = rawContent ? parseSheetDataFromBlock(rawContent) : [
     ["Concepto", "Cantidad", "Precio Unitario", "Total"],
     ["Servidor Cloud", 2, 45, "=B2*C2"],
     ["Dominio Web", 1, 15, "=B3*C3"],

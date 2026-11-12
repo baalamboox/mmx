@@ -147,6 +147,7 @@ body {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  margin-top: 4px;
 }
 
 .ai-badge {
@@ -2505,6 +2506,12 @@ body.vault-dragging .root-drop-indicator {
   font-size: 0.88em;
 }
 
+.markdown-rendered code.inline-code-highlighted {
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.7);
+  border-color: rgba(99, 102, 241, 0.35);
+}
+
 .markdown-rendered pre {
   background: #0b1120;
   border: 1px solid var(--border-subtle);
@@ -2513,6 +2520,7 @@ body.vault-dragging .root-drop-indicator {
   overflow-x: auto;
   margin: 1.4em 0;
   box-shadow: var(--shadow-sm);
+  position: relative;
 }
 
 .markdown-rendered pre code {
@@ -2521,6 +2529,151 @@ body.vault-dragging .root-drop-indicator {
   padding: 0;
   color: #f1f5f9;
   font-size: 0.9em;
+  font-family: var(--font-mono);
+}
+
+.btn-copy-code {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0.5;
+  transition: all var(--transition-fast);
+  font-family: var(--font-sans);
+  z-index: 5;
+}
+
+.markdown-rendered pre:hover .btn-copy-code {
+  opacity: 1;
+}
+
+.btn-copy-code:hover {
+  color: var(--text-main);
+  border-color: var(--primary);
+  background: var(--bg-surface);
+}
+
+/* ==========================================================================
+   RESALTADO DE SINTAXIS PRISMJS (PALETA KORTEXA DARK & LIGHT)
+   ========================================================================== */
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  color: #64748b;
+  font-style: italic;
+}
+
+.token.punctuation {
+  color: #94a3b8;
+}
+
+.token.property,
+.token.tag,
+.token.boolean,
+.token.number,
+.token.constant,
+.token.symbol,
+.token.deleted {
+  color: #f472b6;
+}
+
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin,
+.token.inserted {
+  color: #34d399;
+}
+
+.token.operator,
+.token.entity,
+.token.url,
+.language-css .token.string,
+.style .token.string {
+  color: #38bdf8;
+}
+
+.token.atrule,
+.token.attr-value,
+.token.keyword {
+  color: #c084fc;
+  font-weight: 600;
+}
+
+.token.function,
+.token.class-name {
+  color: #60a5fa;
+}
+
+.token.regex,
+.token.important,
+.token.variable {
+  color: #fbbf24;
+}
+
+/* Modo claro para tokens de sintaxis Prism */
+[data-resolved-theme="light"] .token.comment,
+[data-resolved-theme="light"] .token.prolog,
+[data-resolved-theme="light"] .token.doctype,
+[data-resolved-theme="light"] .token.cdata {
+  color: #94a3b8;
+}
+
+[data-resolved-theme="light"] .token.punctuation {
+  color: #475569;
+}
+
+[data-resolved-theme="light"] .token.property,
+[data-resolved-theme="light"] .token.tag,
+[data-resolved-theme="light"] .token.boolean,
+[data-resolved-theme="light"] .token.number,
+[data-resolved-theme="light"] .token.constant,
+[data-resolved-theme="light"] .token.symbol {
+  color: #e11d48;
+}
+
+[data-resolved-theme="light"] .token.selector,
+[data-resolved-theme="light"] .token.attr-name,
+[data-resolved-theme="light"] .token.string,
+[data-resolved-theme="light"] .token.char,
+[data-resolved-theme="light"] .token.builtin {
+  color: #059669;
+}
+
+[data-resolved-theme="light"] .token.operator,
+[data-resolved-theme="light"] .token.entity,
+[data-resolved-theme="light"] .token.url {
+  color: #0284c7;
+}
+
+[data-resolved-theme="light"] .token.atrule,
+[data-resolved-theme="light"] .token.attr-value,
+[data-resolved-theme="light"] .token.keyword {
+  color: #7c3aed;
+  font-weight: 600;
+}
+
+[data-resolved-theme="light"] .token.function,
+[data-resolved-theme="light"] .token.class-name {
+  color: #2563eb;
+}
+
+[data-resolved-theme="light"] .token.regex,
+[data-resolved-theme="light"] .token.important,
+[data-resolved-theme="light"] .token.variable {
+  color: #d97706;
 }
 
 /* Subrayado, Resaltado y Tablas en Markdown */
@@ -2878,6 +3031,8 @@ body.vault-dragging .root-drop-indicator {
 .embedded-media-block {
   margin: 14px 0;
   display: block;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .embedded-media-img,
@@ -2896,7 +3051,9 @@ body.vault-dragging .root-drop-indicator {
 }
 
 .embedded-media-video {
+  width: 100%;
   max-width: 100%;
+  box-sizing: border-box;
   border-radius: 8px;
   border: 1px solid var(--border-subtle);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
@@ -2904,23 +3061,43 @@ body.vault-dragging .root-drop-indicator {
 
 .embedded-audio-block {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
-  padding: 8px 14px;
+  padding: 10px 14px;
 }
 
 .embedded-media-audio {
-  flex: 1;
+  width: 100%;
   height: 36px;
+  display: block;
 }
 
 .embedded-caption {
-  font-size: 11px;
+  font-size: 11.5px;
   font-family: var(--font-mono);
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  max-width: 100%;
+}
+
+.embedded-note-card {
+  margin: 14px 0;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgba(99, 102, 241, 0.06);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  display: flex;
+  align-items: center;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .embedded-pdf-block {
@@ -2948,6 +3125,83 @@ body.vault-dragging .root-drop-indicator {
 
 .pdf-link-out:hover {
   text-decoration: underline;
+}
+
+/* ==========================================================================
+   LISTAS DE VERIFICACIÓN / TAREAS INTERACTIVAS (CHECKLISTS)
+   ========================================================================== */
+.contains-task-list {
+  list-style: none !important;
+  padding-left: 0 !important;
+  margin-left: 0 !important;
+}
+
+.task-list-item {
+  list-style-type: none !important;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 6px 0;
+  line-height: 1.5;
+  transition: color 0.15s ease, opacity 0.15s ease;
+}
+
+.task-list-item-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 17px;
+  height: 17px;
+  min-width: 17px;
+  border: 1.6px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  cursor: pointer;
+  margin-top: 3.5px;
+  display: inline-grid;
+  place-content: center;
+  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.task-list-item-checkbox:hover {
+  border-color: var(--primary);
+  box-shadow: 0 0 8px rgba(99, 102, 241, 0.3);
+  transform: scale(1.05);
+}
+
+.task-list-item-checkbox:checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.task-list-item-checkbox:checked::before {
+  content: "";
+  width: 9px;
+  height: 5px;
+  border-left: 2px solid #ffffff;
+  border-bottom: 2px solid #ffffff;
+  transform: rotate(-45deg) translate(1px, -1px);
+}
+
+.task-list-item.task-completed {
+  color: var(--text-muted);
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+[data-resolved-theme="light"] .task-list-item-checkbox {
+  background: #ffffff;
+  border-color: #cbd5e1;
+}
+
+[data-resolved-theme="light"] .task-list-item-checkbox:hover {
+  border-color: #6366f1;
+}
+
+[data-resolved-theme="light"] .task-list-item-checkbox:checked {
+  background: #6366f1;
+  border-color: #6366f1;
 }
 
 
@@ -3501,6 +3755,12 @@ body.vault-dragging .root-drop-indicator {
   background: rgba(2, 132, 199, 0.08);
   border-color: rgba(2, 132, 199, 0.25);
   color: #0284c7;
+}
+
+[data-resolved-theme="light"] .markdown-rendered code.inline-code-highlighted {
+  color: #0f172a;
+  background: rgba(241, 245, 249, 0.95);
+  border-color: rgba(203, 213, 225, 0.85);
 }
 
 [data-resolved-theme="light"] .markdown-rendered pre {
@@ -5339,6 +5599,77 @@ body.vault-dragging .root-drop-indicator {
   position: relative;
   background: var(--bg-surface);
   transition: background var(--transition-normal);
+  overflow: auto;
+}
+
+/* Tabla Excel con Coordenadas Clásicas (Letras A-Z y Números 1-N) */
+.spreadsheet-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  font-family: var(--font-sans);
+  background: var(--bg-card);
+}
+.spreadsheet-table th, .spreadsheet-table td {
+  border: 1px solid var(--border-subtle);
+  padding: 6px 12px;
+  text-align: left;
+  min-width: 65px;
+  height: 28px;
+  box-sizing: border-box;
+}
+.spreadsheet-table .excel-corner-header {
+  width: 44px;
+  min-width: 44px;
+  max-width: 44px;
+  background: rgba(255, 255, 255, 0.05);
+  border-right: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: center;
+}
+.spreadsheet-table .excel-col-header {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  user-select: none;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.spreadsheet-table .excel-row-header {
+  width: 44px;
+  min-width: 44px;
+  max-width: 44px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  user-select: none;
+  border-right: 1px solid var(--border-subtle);
+}
+.spreadsheet-table td {
+  color: var(--text-main);
+  background: transparent;
+}
+.spreadsheet-table tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+[data-resolved-theme="light"] .spreadsheet-table .excel-corner-header,
+[data-resolved-theme="light"] .spreadsheet-table .excel-col-header,
+[data-resolved-theme="light"] .spreadsheet-table .excel-row-header {
+  background: #f1f5f9;
+  color: #64748b;
+}
+[data-resolved-theme="light"] .spreadsheet-table th,
+[data-resolved-theme="light"] .spreadsheet-table td {
+  border-color: #e2e8f0;
+}
+[data-resolved-theme="light"] .spreadsheet-table tr:hover td {
+  background: rgba(0, 0, 0, 0.02);
 }
 
 /* Modal de Pantalla Completa FortuneSheet */
